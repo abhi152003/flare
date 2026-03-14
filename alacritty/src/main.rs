@@ -1,4 +1,4 @@
-//! Alacritty - The GPU Enhanced Terminal.
+//! Flare - The GPU Enhanced Terminal.
 
 #![warn(rust_2018_idioms, future_incompatible)]
 #![deny(clippy::all, clippy::if_not_else, clippy::enum_glob_use)]
@@ -46,6 +46,7 @@ mod polling;
 mod renderer;
 mod scheduler;
 mod string;
+mod tab;
 mod window_context;
 
 mod gl {
@@ -103,7 +104,7 @@ fn msg(mut options: MessageOptions) -> Result<(), Box<dyn Error>> {
     ipc::send_message(options.socket, options.message).map_err(|err| err.into())
 }
 
-/// Temporary files stored for Alacritty.
+/// Temporary files stored for Flare.
 ///
 /// This stores temporary files to automate their destruction through its `Drop` implementation.
 struct TemporaryFiles {
@@ -129,7 +130,7 @@ impl Drop for TemporaryFiles {
     }
 }
 
-/// Run main Alacritty entrypoint.
+/// Run main entrypoint.
 ///
 /// Creates a window, the terminal state, PTY, I/O event loop, input processor,
 /// config change monitor, and runs the main display loop.
@@ -141,7 +142,7 @@ fn alacritty(mut options: Options) -> Result<(), Box<dyn Error>> {
     let log_file = logging::initialize(&options, window_event_loop.create_proxy())
         .expect("Unable to initialize logger");
 
-    info!("Welcome to Alacritty");
+    info!("Welcome to Flare");
     info!("Version {}", env!("VERSION"));
 
     #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]

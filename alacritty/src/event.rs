@@ -660,6 +660,17 @@ impl Default for InlineSearchState {
     }
 }
 
+/// Pending tab/pane actions that need to be handled at the WindowContext level.
+#[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
+pub enum TabAction {
+    CreateNewTab,
+    CloseTab,
+    NextTab,
+    PreviousTab,
+    SelectTab(usize),
+}
+
 pub struct ActionContext<'a, N, T> {
     pub notifier: &'a mut N,
     pub terminal: &'a mut Term<T>,
@@ -685,6 +696,7 @@ pub struct ActionContext<'a, N, T> {
     pub master_fd: RawFd,
     #[cfg(not(windows))]
     pub shell_pid: u32,
+    pub pending_tab_action: &'a mut Option<TabAction>,
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionContext<'a, N, T> {
@@ -1496,6 +1508,28 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn scheduler_mut(&mut self) -> &mut Scheduler {
         self.scheduler
+    }
+
+    // Flare tab/pane operations.
+    fn tab_manager(&self) -> &crate::tab::TabManager {
+        static EMPTY: std::sync::OnceLock<crate::tab::TabManager> = std::sync::OnceLock::new();
+        EMPTY.get_or_init(crate::tab::TabManager::new)
+    }
+
+    fn create_new_tab(&mut self) {
+        *self.pending_tab_action = Some(TabAction::CreateNewTab);
+    }
+
+    fn close_active_tab(&mut self) {
+        *self.pending_tab_action = Some(TabAction::CloseTab);
+    }
+
+    fn select_next_tab(&mut self) {
+        *self.pending_tab_action = Some(TabAction::NextTab);
+    }
+
+    fn select_previous_tab(&mut self) {
+        *self.pending_tab_action = Some(TabAction::PreviousTab);
     }
 }
 

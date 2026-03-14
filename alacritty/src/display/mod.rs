@@ -39,7 +39,7 @@ use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 use crate::config::UiConfig;
 use crate::config::debug::RendererPreference;
 use crate::config::font::Font;
-use crate::config::window::Dimensions;
+use crate::config::window::{Decorations, Dimensions};
 #[cfg(not(windows))]
 use crate::config::window::StartupMode;
 use crate::display::bell::VisualBell;
@@ -466,8 +466,17 @@ impl Display {
         renderer.resize(&size_info);
 
         // Clear screen.
-        let background_color = config.colors.primary.background;
-        renderer.clear(background_color, config.window_opacity());
+        if let Some(ref gradient) = config.window.background_gradient {
+            renderer.draw_gradient(
+                &size_info,
+                gradient,
+                config.window_opacity(),
+                config.window.border_radius,
+            );
+        } else {
+            let background_color = config.colors.primary.background;
+            renderer.clear(background_color, config.window_opacity());
+        }
 
         // Disable shadows for transparent windows on macOS.
         #[cfg(target_os = "macos")]
@@ -779,6 +788,8 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
+        tab_bar_info: Option<(&[String], usize)>,
+        close_button_hovered: bool,
     ) {
         // Collect renderable content before the terminal is dropped.
         let mut content = RenderableContent::new(config, self, &terminal, search_state);
@@ -835,7 +846,17 @@ impl Display {
         // Make sure this window's OpenGL context is active.
         self.make_current();
 
-        self.renderer.clear(background_color, config.window_opacity());
+        // Use gradient background if configured, otherwise fall back to flat clear.
+        if let Some(ref gradient) = config.window.background_gradient {
+            self.renderer.draw_gradient(
+                &size_info,
+                gradient,
+                config.window_opacity(),
+                config.window.border_radius,
+            );
+        } else {
+            self.renderer.clear(background_color, config.window_opacity());
+        }
         let mut lines = RenderLines::new();
 
         // Optimize loop hint comparator.
@@ -958,6 +979,102 @@ impl Display {
                 };
 
                 self.draw_ime_preview(point, fg, bg, &mut rects, config);
+            }
+        }
+
+        // Draw close button when using no decorations.
+        if matches!(config.window.decorations, Decorations::None) {
+            let btn_columns = 3;
+            let start_column = Column(size_info.columns().saturating_sub(btn_columns));
+            let point = Point::new(0, start_column);
+
+            let (fg, bg) = if close_button_hovered {
+                (Rgb::new(220, 80, 75), Rgb::new(60, 25, 25))
+            } else {
+                (Rgb::new(120, 120, 140), Rgb::new(30, 30, 45))
+            };
+
+            let glyph_cache = &mut self.glyph_cache;
+
+            self.renderer.draw_string(
+                point,
+                fg,
+                bg,
+                " ✕ ".chars(),
+                &size_info,
+                glyph_cache,
+            );
+
+            // Damage the close button area.
+            let btn_x = (size_info.columns() - btn_columns) * size_info.cell_width() as usize;
+            let btn_width = btn_columns * size_info.cell_width() as usize;
+            self.damage_tracker.frame().add_viewport_rect(
+                &size_info,
+                btn_x as i32,
+                0,
+                btn_width as i32,
+                size_info.cell_height() as i32,
+            );
+        }
+
+        // Draw tab bar if there are multiple tabs.
+        if let Some((tab_titles, active_index)) = tab_bar_info {
+            if tab_titles.len() > 1 {
+                let tab_bar_line: usize = 0;
+                let y = size_info.cell_height().mul_add(0.0, size_info.padding_y());
+                let width = size_info.width() as f32;
+
+                // Background for the tab bar.
+                let tab_bar_bg = config.colors.primary.background;
+                let tab_bar_rect = RenderRect::new(0., y, width, size_info.cell_height(), tab_bar_bg, 1.);
+                rects.push(tab_bar_rect);
+
+                // Highlight active tab.
+                let tab_bar_fg = config.colors.primary.foreground;
+                let active_tab_width = width / tab_titles.len() as f32;
+                let active_x = active_index as f32 * active_tab_width;
+                let active_rect =
+                    RenderRect::new(active_x, y, active_tab_width, size_info.cell_height(), tab_bar_fg, 1.);
+                rects.push(active_rect);
+
+                // Draw tab titles.
+                let glyph_cache = &mut self.glyph_cache;
+                let tab_bar_width = size_info.columns();
+                let chars_per_tab = std::cmp::max(tab_bar_width / tab_titles.len() - 1, 1);
+
+                let mut current_column = Column(0);
+                for (i, title) in tab_titles.iter().enumerate() {
+                    let (fg, bg) = if i == active_index {
+                        (config.colors.primary.background, config.colors.primary.foreground)
+                    } else {
+                        (config.colors.primary.foreground, config.colors.primary.background)
+                    };
+
+                    let display_string: String =
+                        StrShortener::new(title, chars_per_tab, ShortenDirection::Right, Some('.'))
+                            .collect();
+
+                    let point = Point::new(tab_bar_line, current_column);
+                    self.renderer.draw_string(
+                        point,
+                        fg,
+                        bg,
+                        display_string.chars(),
+                        &size_info,
+                        glyph_cache,
+                    );
+
+                    current_column.0 += chars_per_tab + 1;
+                }
+
+                // Always damage the tab bar.
+                self.damage_tracker.frame().add_viewport_rect(
+                    &size_info,
+                    0,
+                    0,
+                    size_info.width() as i32,
+                    size_info.cell_height() as i32,
+                );
             }
         }
 

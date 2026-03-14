@@ -20,9 +20,11 @@ use crate::display::SizeInfo;
 use crate::display::color::Rgb;
 use crate::display::content::RenderableCell;
 use crate::gl;
+use crate::renderer::gradient::GradientRenderer;
 use crate::renderer::rects::{RectRenderer, RenderRect};
 use crate::renderer::shader::ShaderError;
 
+pub mod gradient;
 pub mod platform;
 pub mod rects;
 mod shader;
@@ -89,6 +91,7 @@ enum TextRendererProvider {
 pub struct Renderer {
     text_renderer: TextRendererProvider,
     rect_renderer: RectRenderer,
+    gradient_renderer: GradientRenderer,
     robustness: bool,
 }
 
@@ -161,6 +164,12 @@ impl Renderer {
             (text_renderer, rect_renderer)
         };
 
+        let gradient_renderer = GradientRenderer::new(if use_glsl3 {
+            ShaderVersion::Glsl3
+        } else {
+            ShaderVersion::Gles2
+        })?;
+
         // Enable debug logging for OpenGL as well.
         if log::max_level() >= LevelFilter::Debug && GlExtensions::contains("GL_KHR_debug") {
             debug!("Enabled debug logging for OpenGL");
@@ -171,7 +180,7 @@ impl Renderer {
             }
         }
 
-        Ok(Self { text_renderer, rect_renderer, robustness })
+        Ok(Self { text_renderer, rect_renderer, gradient_renderer, robustness })
     }
 
     pub fn draw_cells<I: Iterator<Item = RenderableCell>>(
@@ -260,6 +269,30 @@ impl Renderer {
             gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
 
             // Restore viewport with padding.
+            self.set_viewport(size_info);
+        }
+    }
+
+    /// Draw a gradient background across the entire window.
+    ///
+    /// Returns `true` if a gradient was drawn.
+    pub fn draw_gradient(
+        &mut self,
+        size_info: &SizeInfo,
+        gradient: &crate::config::window::GradientConfig,
+        opacity: f32,
+        border_radius: f32,
+    ) {
+        unsafe {
+            gl::Viewport(0, 0, size_info.width() as i32, size_info.height() as i32);
+            gl::Enable(gl::BLEND);
+            gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
+        }
+
+        self.gradient_renderer.draw(size_info, gradient, opacity, border_radius);
+
+        unsafe {
+            gl::BlendFunc(gl::SRC1_COLOR, gl::ONE_MINUS_SRC1_COLOR);
             self.set_viewport(size_info);
         }
     }

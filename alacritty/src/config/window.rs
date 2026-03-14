@@ -12,9 +12,47 @@ use alacritty_config_derive::{ConfigDeserialize, SerdeReplace};
 
 use crate::config::LOG_TARGET_CONFIG;
 use crate::config::ui_config::{Delta, Percentage};
+use crate::display::color::Rgb;
 
-/// Default Alacritty name, used for window title and class.
-pub const DEFAULT_NAME: &str = "Alacritty";
+/// Default name, used for window title and class.
+pub const DEFAULT_NAME: &str = "Flare";
+
+/// Gradient configuration for the terminal background.
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct GradientConfig {
+    /// Start color of the gradient.
+    pub start: Rgb,
+
+    /// End color of the gradient.
+    pub end: Rgb,
+
+    /// Direction of the gradient.
+    #[serde(default)]
+    pub direction: GradientDirection,
+}
+
+impl Default for GradientConfig {
+    fn default() -> Self {
+        Self {
+            start: Rgb::new(0x1a, 0x1b, 0x26),
+            end: Rgb::new(0x24, 0x28, 0x3b),
+            direction: GradientDirection::Vertical,
+        }
+    }
+}
+
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GradientDirection {
+    /// Gradient flows from top to bottom.
+    #[default]
+    Vertical,
+
+    /// Gradient flows from left to right.
+    Horizontal,
+
+    /// Gradient flows diagonally from top-left to bottom-right.
+    Diagonal,
+}
 
 #[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct WindowConfig {
@@ -47,6 +85,12 @@ pub struct WindowConfig {
 
     /// Request blur behind the window.
     pub blur: bool,
+
+    /// Background gradient. When set, replaces the flat background color.
+    pub background_gradient: Option<GradientConfig>,
+
+    /// Rounded corner radius in pixels. 0 means no rounding.
+    pub border_radius: f32,
 
     /// Controls which `Option` key should be treated as `Alt`.
     option_as_alt: OptionAsAlt,
@@ -85,6 +129,8 @@ impl Default for WindowConfig {
             decorations_theme_variant: Default::default(),
             option_as_alt: Default::default(),
             level: Default::default(),
+            background_gradient: Default::default(),
+            border_radius: 0.0,
         }
     }
 }

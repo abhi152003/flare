@@ -31,46 +31,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "alacritty"
-version = "0.17.0-dev"
-dependencies = [
- "ahash",
- "alacritty_config",
- "alacritty_config_derive",
- "alacritty_terminal",
- "bitflags 2.9.4",
- "clap",
- "clap_complete",
- "copypasta",
- "crossfont",
- "dirs",
- "embed-resource",
- "gl_generator",
- "glutin",
- "home",
- "libc",
- "log",
- "notify",
- "objc2 0.6.3",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "parking_lot",
- "png",
- "polling",
- "serde",
- "serde_json",
- "serde_yaml",
- "signal-hook",
- "tempfile",
- "toml",
- "toml_edit 0.24.0+spec-1.1.0",
- "unicode-width",
- "windows-sys 0.59.0",
- "winit",
- "xdg",
-]
-
-[[package]]
 name = "alacritty_config"
 version = "0.2.4-dev"
 dependencies = [
@@ -668,6 +628,46 @@ name = "find-msvc-tools"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0399f9d26e5191ce32c498bebd31e7a3ceabc2745f0ac54af3f335126c3f24b3"
+
+[[package]]
+name = "flare"
+version = "0.1.0"
+dependencies = [
+ "ahash",
+ "alacritty_config",
+ "alacritty_config_derive",
+ "alacritty_terminal",
+ "bitflags 2.9.4",
+ "clap",
+ "clap_complete",
+ "copypasta",
+ "crossfont",
+ "dirs",
+ "embed-resource",
+ "gl_generator",
+ "glutin",
+ "home",
+ "libc",
+ "log",
+ "notify",
+ "objc2 0.6.3",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "parking_lot",
+ "png",
+ "polling",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "signal-hook",
+ "tempfile",
+ "toml",
+ "toml_edit 0.24.0+spec-1.1.0",
+ "unicode-width",
+ "windows-sys 0.59.0",
+ "winit",
+ "xdg",
+]
 
 [[package]]
 name = "flate2"

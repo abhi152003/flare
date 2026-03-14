@@ -249,6 +249,32 @@ pub enum Action {
 
     /// No action.
     None,
+
+    // ===== Flare-specific: Pane actions =====
+
+    /// Split the active pane vertically (side by side).
+    SplitPaneVertical,
+
+    /// Split the active pane horizontally (top and bottom).
+    SplitPaneHorizontal,
+
+    /// Close the active pane.
+    ClosePane,
+
+    /// Move focus to the pane on the left.
+    SwitchPaneLeft,
+
+    /// Move focus to the pane on the right.
+    SwitchPaneRight,
+
+    /// Move focus to the pane above.
+    SwitchPaneUp,
+
+    /// Move focus to the pane below.
+    SwitchPaneDown,
+
+    /// Close the active tab.
+    CloseTab,
 }
 
 impl From<&'static str> for Action {
@@ -563,7 +589,34 @@ fn common_keybindings() -> Vec<KeyBinding> {
 
 #[cfg(not(any(target_os = "macos", target_os = "windows", test)))]
 pub fn platform_key_bindings() -> Vec<KeyBinding> {
-    common_keybindings()
+    let mut bindings = common_keybindings();
+
+    // Flare tab keybindings.
+    bindings.extend(bindings!(
+        KeyBinding;
+        "t",    ModifiersState::CONTROL;                                         Action::CreateNewTab;
+        "w",    ModifiersState::CONTROL;                                         Action::CloseTab;
+        Tab,    ModifiersState::CONTROL;                                         Action::SelectNextTab;
+        Tab,    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::SelectPreviousTab;
+        "1",    ModifiersState::ALT;                                             Action::SelectTab1;
+        "2",    ModifiersState::ALT;                                             Action::SelectTab2;
+        "3",    ModifiersState::ALT;                                             Action::SelectTab3;
+        "4",    ModifiersState::ALT;                                             Action::SelectTab4;
+        "5",    ModifiersState::ALT;                                             Action::SelectTab5;
+        "6",    ModifiersState::ALT;                                             Action::SelectTab6;
+        "7",    ModifiersState::ALT;                                             Action::SelectTab7;
+        "8",    ModifiersState::ALT;                                             Action::SelectTab8;
+        "9",    ModifiersState::ALT;                                             Action::SelectLastTab;
+        // Flare pane keybindings.
+        "|",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::SplitPaneVertical;
+        "-",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::SplitPaneHorizontal;
+        ArrowLeft,  ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneLeft;
+        ArrowRight, ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneRight;
+        ArrowUp,    ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneUp;
+        ArrowDown,  ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneDown;
+    ));
+
+    bindings
 }
 
 #[cfg(all(target_os = "windows", not(test)))]

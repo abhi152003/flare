@@ -144,6 +144,14 @@ pub trait ActionContext<T: EventListener> {
         S: AsRef<OsStr>,
     {
     }
+
+    // Flare tab/pane operations.
+    #[allow(dead_code)]
+    fn tab_manager(&self) -> &crate::tab::TabManager;
+    fn create_new_tab(&mut self) {}
+    fn close_active_tab(&mut self) {}
+    fn select_next_tab(&mut self) {}
+    fn select_previous_tab(&mut self) {}
 }
 
 impl Action {
@@ -440,6 +448,21 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SelectTab9 => ctx.window().select_tab_at_index(8),
             #[cfg(target_os = "macos")]
             Action::SelectLastTab => ctx.window().select_last_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::CreateNewTab => ctx.create_new_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::CloseTab => ctx.close_active_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectNextTab => ctx.select_next_tab(),
+            #[cfg(not(target_os = "macos"))]
+            Action::SelectPreviousTab => ctx.select_previous_tab(),
+            Action::SplitPaneVertical => ctx.mark_dirty(),
+            Action::SplitPaneHorizontal => ctx.mark_dirty(),
+            Action::ClosePane => ctx.mark_dirty(),
+            Action::SwitchPaneLeft
+            | Action::SwitchPaneRight
+            | Action::SwitchPaneUp
+            | Action::SwitchPaneDown => ctx.mark_dirty(),
             _ => (),
         }
     }
@@ -1067,6 +1090,29 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         match_found
     }
 
+    /// Check whether the mouse is hovering over the close button in borderless mode.
+    fn close_button_hovered(&self) -> bool {
+        use crate::config::window::Decorations;
+
+        if self.ctx.config().window.decorations != Decorations::None {
+            return false;
+        }
+
+        let size_info = self.ctx.size_info();
+        let mouse = self.ctx.mouse();
+        let btn_columns = 3;
+        let padding_x = size_info.padding_x() as usize;
+        let padding_y = size_info.padding_y() as usize;
+        let cell_width = size_info.cell_width() as usize;
+        let cell_height = size_info.cell_height() as usize;
+
+        let btn_start_x = padding_x + size_info.columns().saturating_sub(btn_columns) * cell_width;
+        let btn_end_x = btn_start_x + btn_columns * cell_width;
+        let btn_end_y = padding_y + cell_height;
+
+        mouse.x >= btn_start_x && mouse.x <= btn_end_x && mouse.y >= padding_y && mouse.y <= btn_end_y
+    }
+
     /// Check mouse icon state in relation to the message bar.
     fn message_bar_cursor_state(&self) -> Option<CursorIcon> {
         // Since search is above the message bar, the button is offset by search's height.
@@ -1094,6 +1140,11 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
     /// Icon state of the cursor.
     fn cursor_state(&mut self) -> CursorIcon {
+        // Check close button hover first (highest priority).
+        if self.close_button_hovered() {
+            return CursorIcon::Pointer;
+        }
+
         let display_offset = self.ctx.terminal().grid().display_offset();
         let point = self.ctx.mouse().point(&self.ctx.size_info(), display_offset);
         let hyperlink = self.ctx.terminal().grid()[point].hyperlink();
@@ -1277,6 +1328,11 @@ mod tests {
 
         fn semantic_word(&self, _point: Point) -> String {
             unimplemented!();
+        }
+
+        fn tab_manager(&self) -> &crate::tab::TabManager {
+            static EMPTY: std::sync::OnceLock<crate::tab::TabManager> = std::sync::OnceLock::new();
+            EMPTY.get_or_init(crate::tab::TabManager::new)
         }
     }
 

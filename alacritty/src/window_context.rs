@@ -16,9 +16,10 @@ use glutin::display::GetGlDisplay;
 use glutin::platform::x11::X11GlConfigExt;
 use log::info;
 use serde_json as json;
-use winit::event::{Event as WinitEvent, Modifiers, WindowEvent};
+use winit::event::{ElementState, Event as WinitEvent, Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::raw_window_handle::HasDisplayHandle;
+use winit::window::CursorIcon;
 use winit::window::WindowId;
 
 use alacritty_terminal::event::Event as TerminalEvent;
@@ -33,15 +34,18 @@ use alacritty_terminal::tty;
 use crate::cli::{ParsedOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
+use crate::config::window::Decorations;
 use crate::display::Display;
 use crate::display::window::Window;
 use crate::event::{
-    ActionContext, Event, EventProxy, InlineSearchState, Mouse, SearchState, TouchPurpose,
+    ActionContext, Event, EventProxy, InlineSearchState, Mouse, SearchState, TabAction,
+    TouchPurpose,
 };
 #[cfg(unix)]
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
+use crate::tab::{self, TabManager};
 use crate::{input, renderer};
 
 /// Event context for one individual Alacritty window.
@@ -67,6 +71,8 @@ pub struct WindowContext {
     shell_pid: u32,
     window_config: ParsedOptions,
     config: Rc<UiConfig>,
+    tab_manager: TabManager,
+    close_button_hovered: bool,
 }
 
 impl WindowContext {
@@ -231,6 +237,23 @@ impl WindowContext {
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
 
+        // Create the initial tab from this terminal.
+        let initial_pane = tab::Pane {
+            terminal: Arc::clone(&terminal),
+            notifier: Notifier(loop_tx.clone()),
+            search_state: SearchState::default(),
+            #[cfg(not(windows))]
+            master_fd,
+            #[cfg(not(windows))]
+            shell_pid,
+        };
+        let initial_tab = tab::Tab {
+            root: tab::PaneNode::Leaf(initial_pane),
+            title: tab::Tab::auto_title(0),
+        };
+        let mut tab_manager = TabManager::new();
+        tab_manager.add_tab(initial_tab);
+
         // Create context for the Alacritty window.
         Ok(WindowContext {
             preserve_title,
@@ -254,6 +277,8 @@ impl WindowContext {
             mouse: Default::default(),
             touch: Default::default(),
             dirty: Default::default(),
+            tab_manager,
+            close_button_hovered: false,
         })
     }
 
@@ -362,6 +387,34 @@ impl WindowContext {
         self.update_config(config);
     }
 
+    /// Check if the current mouse position is inside the close button area.
+    /// Returns `Some((in_x_range, in_y_range))` if in borderless mode, `None` otherwise.
+    fn mouse_click_in_close_button(&self) -> Option<(bool, bool)> {
+        if self.config.window.decorations != Decorations::None {
+            return None;
+        }
+
+        let size_info = &self.display.size_info;
+        let btn_columns = 3;
+        let padding_x = size_info.padding_x() as usize;
+        let padding_y = size_info.padding_y() as usize;
+        let cell_width = size_info.cell_width() as usize;
+        let cell_height = size_info.cell_height() as usize;
+
+        let btn_start_x = padding_x + size_info.columns().saturating_sub(btn_columns) * cell_width;
+        let btn_end_x = btn_start_x + btn_columns * cell_width;
+        let btn_start_y = padding_y;
+        let btn_end_y = padding_y + cell_height;
+
+        let mouse_x = self.mouse.x;
+        let mouse_y = self.mouse.y;
+
+        let in_x = mouse_x >= btn_start_x && mouse_x <= btn_end_x;
+        let in_y = mouse_y >= btn_start_y && mouse_y <= btn_end_y;
+
+        Some((in_x, in_y))
+    }
+
     /// Draw the window.
     pub fn draw(&mut self, scheduler: &mut Scheduler) {
         self.display.window.requested_redraw = false;
@@ -388,12 +441,28 @@ impl WindowContext {
 
         // Redraw the window.
         let terminal = self.terminal.lock();
+
+        // Collect tab bar info for rendering.
+        let tab_bar_info = if self.tab_manager.tab_count() > 1 {
+            let titles: Vec<String> = self
+                .tab_manager
+                .tabs()
+                .iter()
+                .map(|tab| tab.title.clone())
+                .collect();
+            Some((titles, self.tab_manager.active_tab_index()))
+        } else {
+            None
+        };
+
         self.display.draw(
             terminal,
             scheduler,
             &self.message_buffer,
             &self.config,
             &mut self.search_state,
+            tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
+            self.close_button_hovered,
         );
     }
 
@@ -406,6 +475,28 @@ impl WindowContext {
         scheduler: &mut Scheduler,
         event: WinitEvent<Event>,
     ) {
+        // Check for close button click in borderless mode.
+        if self.config.window.decorations == Decorations::None {
+            if let WinitEvent::WindowEvent {
+                event:
+                    WindowEvent::MouseInput {
+                        state: ElementState::Pressed,
+                        button: winit::event::MouseButton::Left,
+                        ..
+                    },
+                ..
+            } = &event
+            {
+                if let Some((in_x, in_y)) = self.mouse_click_in_close_button() {
+                    if in_x && in_y {
+                        let mut terminal = self.terminal.lock();
+                        terminal.exit();
+                        return;
+                    }
+                }
+            }
+        }
+
         match event {
             WinitEvent::AboutToWait
             | WinitEvent::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
@@ -425,6 +516,7 @@ impl WindowContext {
         let mut terminal = self.terminal.lock();
 
         let old_is_searching = self.search_state.history_index.is_some();
+        let mut pending_tab_action = None;
 
         let context = ActionContext {
             cursor_blink_timed_out: &mut self.cursor_blink_timed_out,
@@ -451,12 +543,36 @@ impl WindowContext {
             event_loop,
             clipboard,
             scheduler,
+            pending_tab_action: &mut pending_tab_action,
         };
         let mut processor = input::Processor::new(context);
 
         for event in self.event_queue.drain(..) {
             processor.handle_event(event);
         }
+
+        // Update close button hover state to trigger redraws on color change.
+        if self.config.window.decorations == Decorations::None {
+            let is_hovered = self
+                .mouse_click_in_close_button()
+                .is_some_and(|(in_x, in_y)| in_x && in_y);
+
+            if is_hovered != self.close_button_hovered {
+                self.close_button_hovered = is_hovered;
+                self.dirty = true;
+            }
+        }
+
+        // Drop the terminal lock before processing tab actions (which may create new PTYs).
+        drop(terminal);
+
+        // Process pending tab/pane actions.
+        if let Some(tab_action) = pending_tab_action {
+            self.handle_tab_action(tab_action, event_proxy);
+        }
+
+        // Re-acquire the terminal lock for display updates.
+        let mut terminal = self.terminal.lock();
 
         // Process DisplayUpdate events.
         if self.display.pending_update.dirty {
@@ -482,6 +598,12 @@ impl WindowContext {
             self.mouse.hint_highlight_dirty = false;
         }
 
+        // Set cursor to pointer when hovering over the close button (after hint processing
+        // which may reset the cursor).
+        if self.config.window.decorations == Decorations::None && self.close_button_hovered {
+            self.display.window.set_mouse_cursor(CursorIcon::Pointer);
+        }
+
         // Don't call `request_redraw` when event is `RedrawRequested` since the `dirty` flag
         // represents the current frame, but redraw is for the next frame.
         if self.dirty
@@ -496,6 +618,148 @@ impl WindowContext {
     /// ID of this terminal context.
     pub fn id(&self) -> WindowId {
         self.display.window.id()
+    }
+
+    /// Get a reference to the tab manager.
+    #[allow(dead_code)]
+    pub fn tab_manager(&self) -> &TabManager {
+        &self.tab_manager
+    }
+
+    /// Get a mutable reference to the tab manager.
+    #[allow(dead_code)]
+    pub fn tab_manager_mut(&mut self) -> &mut TabManager {
+        &mut self.tab_manager
+    }
+
+    /// Create a new tab with a fresh PTY and terminal.
+    pub fn create_new_tab(&mut self, proxy: &EventLoopProxy<Event>) {
+        let pty_config = self.config.pty_config();
+
+        let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
+
+        let terminal = Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
+        let terminal = Arc::new(FairMutex::new(terminal));
+
+        let pty = match tty::new(&pty_config, self.display.size_info.into(), self.display.window.id().into()) {
+            Ok(pty) => pty,
+            Err(err) => {
+                log::error!("Failed to create PTY for new tab: {err}");
+                return;
+            },
+        };
+
+        #[cfg(not(windows))]
+        let master_fd = pty.file().as_raw_fd();
+        #[cfg(not(windows))]
+        let shell_pid = pty.child().id();
+
+        let event_loop = match PtyEventLoop::new(
+            Arc::clone(&terminal),
+            event_proxy,
+            pty,
+            pty_config.drain_on_exit,
+            self.config.debug.ref_test,
+        ) {
+            Ok(el) => el,
+            Err(err) => {
+                log::error!("Failed to create PTY event loop for new tab: {err}");
+                return;
+            },
+        };
+
+        let loop_tx = event_loop.channel();
+        let _io_thread = event_loop.spawn();
+
+        let pane = tab::Pane {
+            terminal: Arc::clone(&terminal),
+            notifier: Notifier(loop_tx),
+            search_state: SearchState::default(),
+            #[cfg(not(windows))]
+            master_fd,
+            #[cfg(not(windows))]
+            shell_pid,
+        };
+
+        let new_tab = tab::Tab {
+            root: tab::PaneNode::Leaf(pane),
+            title: tab::Tab::auto_title(self.tab_manager.tab_count()),
+        };
+
+        // Store the new tab's terminal state for later activation.
+        self.tab_manager.add_tab(new_tab);
+
+        // Now swap the active terminal into the WindowContext fields.
+        self.activate_tab(self.tab_manager.active_tab_index(), proxy);
+    }
+
+    /// Switch to a specific tab by index.
+    pub fn activate_tab(&mut self, index: usize, proxy: &EventLoopProxy<Event>) {
+        if index >= self.tab_manager.tab_count() {
+            return;
+        }
+
+        self.tab_manager.select_tab(index);
+
+        let active_tab = self.tab_manager.active_tab();
+        let active_pane = active_tab.active_pane();
+
+        // Replace the active terminal with the one from the selected tab.
+        self.terminal = Arc::clone(&active_pane.terminal);
+
+        // Start cursor blinking for the new terminal.
+        if self.config.cursor.style().blinking {
+            let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
+            event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
+        }
+
+        self.dirty = true;
+    }
+
+    /// Close the currently active tab.
+    pub fn close_active_tab(&mut self, proxy: &EventLoopProxy<Event>) {
+        if self.tab_manager.tab_count() <= 1 {
+            return;
+        }
+
+        // Shut down the active tab's PTY.
+        let active_tab = self.tab_manager.active_tab();
+        let _ = active_tab.active_pane().notifier.0.send(Msg::Shutdown);
+
+        let current_index = self.tab_manager.active_tab_index();
+        self.tab_manager.close_tab(current_index);
+
+        // Activate the now-current tab.
+        self.activate_tab(self.tab_manager.active_tab_index(), proxy);
+    }
+
+    /// Handle a pending tab/pane action from the input processor.
+    fn handle_tab_action(&mut self, action: TabAction, proxy: &EventLoopProxy<Event>) {
+        match action {
+            TabAction::CreateNewTab => self.create_new_tab(proxy),
+            TabAction::CloseTab => self.close_active_tab(proxy),
+            TabAction::NextTab => {
+                if self.tab_manager.tab_count() > 1 {
+                    self.activate_tab(
+                        (self.tab_manager.active_tab_index() + 1) % self.tab_manager.tab_count(),
+                        proxy,
+                    );
+                }
+            },
+            TabAction::PreviousTab => {
+                if self.tab_manager.tab_count() > 1 {
+                    let len = self.tab_manager.tab_count();
+                    let new_index =
+                        (self.tab_manager.active_tab_index() + len - 1) % len;
+                    self.activate_tab(new_index, proxy);
+                }
+            },
+            TabAction::SelectTab(index) => {
+                if index < self.tab_manager.tab_count() {
+                    self.activate_tab(index, proxy);
+                }
+            },
+        }
     }
 
     /// Write the ref test results to the disk.
@@ -562,7 +826,11 @@ impl WindowContext {
 
 impl Drop for WindowContext {
     fn drop(&mut self) {
-        // Shutdown the terminal's PTY.
-        let _ = self.notifier.0.send(Msg::Shutdown);
+        // Shutdown all tabs' PTYs.
+        for tab in self.tab_manager.tabs() {
+            for pane in tab.root.iter_leaves() {
+                let _ = pane.notifier.0.send(Msg::Shutdown);
+            }
+        }
     }
 }

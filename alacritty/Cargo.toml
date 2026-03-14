@@ -1,9 +1,9 @@
 [package]
-name = "alacritty"
-version = "0.17.0-dev"
+name = "flare"
+version = "0.1.0"
 authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.com>"]
 license = "Apache-2.0"
-description = "A fast, cross-platform, OpenGL terminal emulator"
+description = "A fast, aesthetic, cross-platform, OpenGL terminal emulator"
 readme = "README.md"
 homepage = "https://alacritty.org"
 repository = "https://github.com/alacritty/alacritty"
