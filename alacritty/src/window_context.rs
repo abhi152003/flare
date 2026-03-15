@@ -35,7 +35,7 @@ use crate::cli::{ParsedOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
 use crate::config::window::Decorations;
-use crate::display::Display;
+use crate::display::{Display, tab_bar_close_button_bounds};
 use crate::display::window::Window;
 use crate::event::{
     ActionContext, Event, EventProxy, InlineSearchState, Mouse, SearchState, TabAction,
@@ -388,31 +388,40 @@ impl WindowContext {
     }
 
     /// Check if the current mouse position is inside the close button area.
-    /// Returns `Some((in_x_range, in_y_range))` if in borderless mode, `None` otherwise.
-    fn mouse_click_in_close_button(&self) -> Option<(bool, bool)> {
+    /// Returns `Some(true)` if the mouse is over the close button, `Some(false)` if in
+    /// borderless mode but not over the button, `None` if not in borderless mode.
+    fn mouse_over_close_button(&self, _display_offset: usize) -> Option<bool> {
         if self.config.window.decorations != Decorations::None {
             return None;
         }
 
         let size_info = &self.display.size_info;
-        let btn_columns = 3;
-        let padding_x = size_info.padding_x() as usize;
-        let padding_y = size_info.padding_y() as usize;
-        let cell_width = size_info.cell_width() as usize;
-        let cell_height = size_info.cell_height() as usize;
+        let tabs_visible = self.tab_manager.tab_count() > 1;
 
-        let btn_start_x = padding_x + size_info.columns().saturating_sub(btn_columns) * cell_width;
-        let btn_end_x = btn_start_x + btn_columns * cell_width;
-        let btn_start_y = padding_y;
-        let btn_end_y = padding_y + cell_height;
+        if tabs_visible {
+            // When tabs are visible, the close button is at the right edge of the tab bar.
+            let (btn_x, btn_y, btn_w, btn_h) =
+                tab_bar_close_button_bounds(size_info, &self.config);
 
-        let mouse_x = self.mouse.x;
-        let mouse_y = self.mouse.y;
+            let mouse_x = self.mouse.x as f32;
+            let mouse_y = self.mouse.y as f32;
 
-        let in_x = mouse_x >= btn_start_x && mouse_x <= btn_end_x;
-        let in_y = mouse_y >= btn_start_y && mouse_y <= btn_end_y;
+            Some(
+                mouse_x >= btn_x
+                    && mouse_x <= btn_x + btn_w
+                    && mouse_y >= btn_y
+                    && mouse_y <= btn_y + btn_h,
+            )
+        } else {
+            // No tabs: close button is at viewport row 0, last 3 columns.
+            let btn_columns = 3;
+            let point = self.mouse.point(size_info, 0);
 
-        Some((in_x, in_y))
+            Some(
+                point.line == 0
+                    && point.column.0 >= size_info.columns().saturating_sub(btn_columns),
+            )
+        }
     }
 
     /// Draw the window.
@@ -448,7 +457,8 @@ impl WindowContext {
                 .tab_manager
                 .tabs()
                 .iter()
-                .map(|tab| tab.title.clone())
+                .enumerate()
+                .map(|(index, _tab)| tab::Tab::auto_title(index))
                 .collect();
             Some((titles, self.tab_manager.active_tab_index()))
         } else {
@@ -487,19 +497,25 @@ impl WindowContext {
                 ..
             } = &event
             {
-                if let Some((in_x, in_y)) = self.mouse_click_in_close_button() {
-                    if in_x && in_y {
-                        let mut terminal = self.terminal.lock();
-                        terminal.exit();
-                        return;
-                    }
+                let mut terminal = self.terminal.lock();
+                let display_offset = terminal.grid().display_offset();
+                if let Some(true) = self.mouse_over_close_button(display_offset) {
+                    terminal.exit();
+                    return;
                 }
             }
         }
 
         match event {
-            WinitEvent::AboutToWait
-            | WinitEvent::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
+            WinitEvent::AboutToWait => {
+                // Skip further event handling with no staged updates.
+                if self.event_queue.is_empty() {
+                    return;
+                }
+
+                // Continue to process all pending events.
+            },
+            WinitEvent::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
                 // Skip further event handling with no staged updates.
                 if self.event_queue.is_empty() {
                     return;
@@ -518,44 +534,50 @@ impl WindowContext {
         let old_is_searching = self.search_state.history_index.is_some();
         let mut pending_tab_action = None;
 
-        let context = ActionContext {
-            cursor_blink_timed_out: &mut self.cursor_blink_timed_out,
-            prev_bell_cmd: &mut self.prev_bell_cmd,
-            message_buffer: &mut self.message_buffer,
-            inline_search_state: &mut self.inline_search_state,
-            search_state: &mut self.search_state,
-            modifiers: &mut self.modifiers,
-            notifier: &mut self.notifier,
-            display: &mut self.display,
-            mouse: &mut self.mouse,
-            touch: &mut self.touch,
-            dirty: &mut self.dirty,
-            occluded: &mut self.occluded,
-            terminal: &mut terminal,
-            #[cfg(not(windows))]
-            master_fd: self.master_fd,
-            #[cfg(not(windows))]
-            shell_pid: self.shell_pid,
-            preserve_title: self.preserve_title,
-            config: &self.config,
-            event_proxy,
-            #[cfg(target_os = "macos")]
-            event_loop,
-            clipboard,
-            scheduler,
-            pending_tab_action: &mut pending_tab_action,
-        };
-        let mut processor = input::Processor::new(context);
-
-        for event in self.event_queue.drain(..) {
+        let pending_events = mem::take(&mut self.event_queue);
+        let mut pending_events = pending_events.into_iter();
+        while let Some(event) = pending_events.next() {
+            let context = ActionContext {
+                cursor_blink_timed_out: &mut self.cursor_blink_timed_out,
+                prev_bell_cmd: &mut self.prev_bell_cmd,
+                message_buffer: &mut self.message_buffer,
+                inline_search_state: &mut self.inline_search_state,
+                search_state: &mut self.search_state,
+                modifiers: &mut self.modifiers,
+                notifier: &mut self.notifier,
+                display: &mut self.display,
+                mouse: &mut self.mouse,
+                touch: &mut self.touch,
+                dirty: &mut self.dirty,
+                occluded: &mut self.occluded,
+                terminal: &mut terminal,
+                #[cfg(not(windows))]
+                master_fd: self.master_fd,
+                #[cfg(not(windows))]
+                shell_pid: self.shell_pid,
+                preserve_title: self.preserve_title,
+                config: &self.config,
+                event_proxy,
+                #[cfg(target_os = "macos")]
+                event_loop,
+                clipboard,
+                scheduler,
+                pending_tab_action: &mut pending_tab_action,
+            };
+            let mut processor = input::Processor::new(context);
             processor.handle_event(event);
+            drop(processor);
+
+            if pending_tab_action.is_some() {
+                self.event_queue.extend(pending_events);
+                break;
+            }
         }
 
         // Update close button hover state to trigger redraws on color change.
         if self.config.window.decorations == Decorations::None {
-            let is_hovered = self
-                .mouse_click_in_close_button()
-                .is_some_and(|(in_x, in_y)| in_x && in_y);
+            let display_offset = terminal.grid().display_offset();
+            let is_hovered = self.mouse_over_close_button(display_offset).unwrap_or(false);
 
             if is_hovered != self.close_button_hovered {
                 self.close_button_hovered = is_hovered;
@@ -568,7 +590,15 @@ impl WindowContext {
 
         // Process pending tab/pane actions.
         if let Some(tab_action) = pending_tab_action {
+            let old_tab_count = self.tab_manager.tab_count();
             self.handle_tab_action(tab_action, event_proxy);
+            let new_tab_count = self.tab_manager.tab_count();
+
+            // When the tab count changes the tab bar appears/disappears, so the display
+            // must be resized to account for the new tab_bar_offset_y.
+            if old_tab_count != new_tab_count {
+                self.display.pending_update.dirty = true;
+            }
         }
 
         // Re-acquire the terminal lock for display updates.
@@ -584,6 +614,7 @@ impl WindowContext {
                 &mut self.search_state,
                 old_is_searching,
                 &self.config,
+                self.tab_manager.tab_count(),
             );
             self.dirty = true;
         }
@@ -699,6 +730,9 @@ impl WindowContext {
             return;
         }
 
+        // Mark the previous terminal as unfocused.
+        self.terminal.lock().is_focused = false;
+
         self.tab_manager.select_tab(index);
 
         let active_tab = self.tab_manager.active_tab();
@@ -706,6 +740,15 @@ impl WindowContext {
 
         // Replace the active terminal with the one from the selected tab.
         self.terminal = Arc::clone(&active_pane.terminal);
+        self.notifier = active_pane.notifier.clone();
+
+        // Mark the new terminal as focused.
+        self.terminal.lock().is_focused = true;
+        #[cfg(not(windows))]
+        {
+            self.master_fd = active_pane.master_fd;
+            self.shell_pid = active_pane.shell_pid;
+        }
 
         // Start cursor blinking for the new terminal.
         if self.config.cursor.style().blinking {
@@ -799,6 +842,7 @@ impl WindowContext {
         search_state: &mut SearchState,
         old_is_searching: bool,
         config: &UiConfig,
+        tab_count: usize,
     ) {
         // Compute cursor positions before resize.
         let num_lines = terminal.screen_lines();
@@ -809,7 +853,14 @@ impl WindowContext {
             search_state.direction == Direction::Left
         };
 
-        display.handle_update(terminal, notifier, message_buffer, search_state, config);
+        display.handle_update(
+            terminal,
+            notifier,
+            message_buffer,
+            search_state,
+            config,
+            tab_count,
+        );
 
         let new_is_searching = search_state.history_index.is_some();
         if !old_is_searching && new_is_searching {

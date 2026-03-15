@@ -2,9 +2,9 @@
 
 use alacritty_terminal::vte::ansi::CursorShape;
 
-use crate::display::SizeInfo;
 use crate::display::color::Rgb;
 use crate::display::content::RenderableCursor;
+use crate::display::SizeInfo;
 use crate::renderer::rects::RenderRect;
 
 /// Trait for conversion into the iterator.
@@ -17,7 +17,9 @@ impl IntoRects for RenderableCursor {
     fn rects(self, size_info: &SizeInfo, thickness: f32) -> CursorRects {
         let point = self.point();
         let x = point.column.0 as f32 * size_info.cell_width() + size_info.padding_x();
-        let y = point.line as f32 * size_info.cell_height() + size_info.padding_y();
+        let y = point.line as f32 * size_info.cell_height()
+            + size_info.padding_y()
+            + size_info.tab_bar_offset_y();
 
         let mut width = size_info.cell_width();
         let height = size_info.cell_height();

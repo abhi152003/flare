@@ -189,6 +189,10 @@ impl Renderer {
         glyph_cache: &mut GlyphCache,
         cells: I,
     ) {
+        // Keep the text projection and viewport aligned with the size info used for this draw.
+        // This allows the terminal grid and tab bar labels to render with different top offsets.
+        self.resize(size_info);
+
         match &mut self.text_renderer {
             TextRendererProvider::Gles2(renderer) => {
                 renderer.draw_cells(size_info, glyph_cache, cells)
@@ -362,12 +366,13 @@ impl Renderer {
     /// Set the viewport for cell rendering.
     #[inline]
     pub fn set_viewport(&self, size: &SizeInfo) {
+        let tab_offset = size.tab_bar_offset_y();
         unsafe {
             gl::Viewport(
                 size.padding_x() as i32,
                 size.padding_y() as i32,
                 size.width() as i32 - 2 * size.padding_x() as i32,
-                size.height() as i32 - 2 * size.padding_y() as i32,
+                size.height() as i32 - 2 * size.padding_y() as i32 - tab_offset as i32,
             );
         }
     }

@@ -32,28 +32,28 @@ use alacritty_terminal::index::{Column, Direction, Line, Point};
 use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{
-    self, LineDamageBounds, MIN_COLUMNS, MIN_SCREEN_LINES, Term, TermDamage, TermMode,
+    self, LineDamageBounds, Term, TermDamage, TermMode, MIN_COLUMNS, MIN_SCREEN_LINES,
 };
 use alacritty_terminal::vte::ansi::{CursorShape, NamedColor};
 
-use crate::config::UiConfig;
 use crate::config::debug::RendererPreference;
 use crate::config::font::Font;
-use crate::config::window::{Decorations, Dimensions};
 #[cfg(not(windows))]
 use crate::config::window::StartupMode;
+use crate::config::window::{Decorations, Dimensions};
+use crate::config::UiConfig;
 use crate::display::bell::VisualBell;
 use crate::display::color::{List, Rgb};
 use crate::display::content::{RenderableContent, RenderableCursor};
 use crate::display::cursor::IntoRects;
-use crate::display::damage::{DamageTracker, damage_y_to_viewport_y};
+use crate::display::damage::{damage_y_to_viewport_y, DamageTracker};
 use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
 use crate::display::window::Window;
 use crate::event::{Event, EventType, Mouse, SearchState};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
-use crate::renderer::{self, GlyphCache, Renderer, platform};
+use crate::renderer::{self, platform, GlyphCache, Renderer};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::string::{ShortenDirection, StrShortener};
 
@@ -78,6 +78,44 @@ const SHORTENER: char = '…';
 
 /// Color which is used to highlight damaged rects when debugging.
 const DAMAGE_RECT_COLOR: Rgb = Rgb::new(255, 0, 255);
+
+const MIN_TAB_BAR_HEIGHT: f32 = 24.0;
+const TAB_BAR_EXTRA_GAP: f32 = 12.0;
+
+#[inline]
+pub(crate) fn effective_tab_bar_height(config: &UiConfig, cell_height: f32) -> f32 {
+    let requested = config.window.tab_bar.height as f32;
+    requested.min((cell_height + 4.0).max(MIN_TAB_BAR_HEIGHT)).round()
+}
+
+#[inline]
+pub(crate) fn reserved_tab_bar_height(
+    config: &UiConfig,
+    cell_height: f32,
+    tab_count: usize,
+) -> f32 {
+    if tab_count > 1 {
+        effective_tab_bar_height(config, cell_height) + TAB_BAR_EXTRA_GAP
+    } else {
+        0.0
+    }
+}
+
+/// Returns (x, y, width, height) for the close button, positioned at the
+/// last grid column so it aligns with the "✕" glyph drawn by the text renderer.
+#[inline]
+pub(crate) fn tab_bar_close_button_bounds(
+    size_info: &SizeInfo,
+    config: &UiConfig,
+) -> (f32, f32, f32, f32) {
+    let tab_bar_height = effective_tab_bar_height(config, size_info.cell_height());
+    let pill_height = (tab_bar_height - 6.0).max(18.0);
+    let pill_y = ((tab_bar_height - pill_height) / 2.0) - 2.0;
+    let btn_w = pill_height;
+    let btn_x = size_info.width() - size_info.padding_x() - btn_w - 6.0;
+
+    (btn_x, pill_y, btn_w, pill_height)
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -141,7 +179,7 @@ impl From<glutin::error::Error> for Error {
 }
 
 /// Terminal size info.
-#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 pub struct SizeInfo<T = f32> {
     /// Terminal window width.
     width: T,
@@ -166,6 +204,9 @@ pub struct SizeInfo<T = f32> {
 
     /// Number of columns in the viewport.
     columns: usize,
+
+    /// Pixel height reserved for the tab bar (shifts grid origin down).
+    tab_bar_offset_y: T,
 }
 
 impl From<SizeInfo<f32>> for SizeInfo<u32> {
@@ -179,6 +220,7 @@ impl From<SizeInfo<f32>> for SizeInfo<u32> {
             padding_y: size_info.padding_y as u32,
             screen_lines: size_info.screen_lines,
             columns: size_info.screen_lines,
+            tab_bar_offset_y: size_info.tab_bar_offset_y as u32,
         }
     }
 }
@@ -224,6 +266,11 @@ impl<T: Clone + Copy> SizeInfo<T> {
     pub fn padding_y(&self) -> T {
         self.padding_y
     }
+
+    #[inline]
+    pub fn tab_bar_offset_y(&self) -> T {
+        self.tab_bar_offset_y
+    }
 }
 
 impl SizeInfo<f32> {
@@ -236,13 +283,14 @@ impl SizeInfo<f32> {
         mut padding_x: f32,
         mut padding_y: f32,
         dynamic_padding: bool,
+        tab_bar_offset_y: f32,
     ) -> SizeInfo {
         if dynamic_padding {
             padding_x = Self::dynamic_padding(padding_x.floor(), width, cell_width);
             padding_y = Self::dynamic_padding(padding_y.floor(), height, cell_height);
         }
 
-        let lines = (height - 2. * padding_y) / cell_height;
+        let lines = (height - 2. * padding_y - tab_bar_offset_y) / cell_height;
         let screen_lines = cmp::max(lines as usize, MIN_SCREEN_LINES);
 
         let columns = (width - 2. * padding_x) / cell_width;
@@ -257,6 +305,7 @@ impl SizeInfo<f32> {
             padding_y: padding_y.floor(),
             screen_lines,
             columns,
+            tab_bar_offset_y,
         }
     }
 
@@ -265,15 +314,22 @@ impl SizeInfo<f32> {
         self.screen_lines = cmp::max(self.screen_lines.saturating_sub(count), MIN_SCREEN_LINES);
     }
 
+    /// Create a copy with a different tab bar offset.
+    pub fn with_tab_bar_offset(mut self, offset: f32) -> SizeInfo {
+        self.tab_bar_offset_y = offset;
+        self
+    }
+
     /// Check if coordinates are inside the terminal grid.
     ///
     /// The padding, message bar or search are not counted as part of the grid.
     #[inline]
     pub fn contains_point(&self, x: usize, y: usize) -> bool {
+        let grid_top = self.padding_y + self.tab_bar_offset_y;
         x <= (self.padding_x + self.columns as f32 * self.cell_width) as usize
             && x > self.padding_x as usize
-            && y <= (self.padding_y + self.screen_lines as f32 * self.cell_height) as usize
-            && y > self.padding_y as usize
+            && y <= (grid_top + self.screen_lines as f32 * self.cell_height) as usize
+            && y > grid_top as usize
     }
 
     /// Calculate padding to spread it evenly around the terminal content.
@@ -456,6 +512,7 @@ impl Display {
             padding.0,
             padding.1,
             config.window.dynamic_padding && config.window.dimensions().is_none(),
+            0.0,
         );
 
         info!("Cell size: {cell_width} x {cell_height}");
@@ -664,6 +721,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         search_state: &mut SearchState,
         config: &UiConfig,
+        tab_count: usize,
     ) where
         T: EventListener,
     {
@@ -698,6 +756,8 @@ impl Display {
 
         let padding = config.window.padding(self.window.scale_factor as f32);
 
+        let tab_bar_offset_y = reserved_tab_bar_height(config, cell_height, tab_count);
+
         let mut new_size = SizeInfo::new(
             width,
             height,
@@ -706,6 +766,7 @@ impl Display {
             padding.0,
             padding.1,
             config.window.dynamic_padding,
+            tab_bar_offset_y,
         );
 
         // Update number of column/lines in the viewport.
@@ -984,10 +1045,6 @@ impl Display {
 
         // Draw close button when using no decorations.
         if matches!(config.window.decorations, Decorations::None) {
-            let btn_columns = 3;
-            let start_column = Column(size_info.columns().saturating_sub(btn_columns));
-            let point = Point::new(0, start_column);
-
             let (fg, bg) = if close_button_hovered {
                 (Rgb::new(220, 80, 75), Rgb::new(60, 25, 25))
             } else {
@@ -996,84 +1053,123 @@ impl Display {
 
             let glyph_cache = &mut self.glyph_cache;
 
-            self.renderer.draw_string(
-                point,
-                fg,
-                bg,
-                " ✕ ".chars(),
-                &size_info,
-                glyph_cache,
-            );
+            // When tabs are visible, draw close button in the tab bar area.
+            // Otherwise, draw it at grid row 0.
+            let tabs_visible = tab_bar_info.is_some_and(|(titles, _)| titles.len() > 1);
+
+            if tabs_visible {
+                // Multi-tab close button background is added in the tab-bar rect pass so it is
+                // drawn above the bar background and tab pills.
+            } else {
+                let btn_columns = 3;
+                let start_column = Column(size_info.columns().saturating_sub(btn_columns));
+                let point = Point::new(0, start_column);
+
+                self.renderer.draw_string(point, fg, bg, " ✕ ".chars(), &size_info, glyph_cache);
+            }
 
             // Damage the close button area.
-            let btn_x = (size_info.columns() - btn_columns) * size_info.cell_width() as usize;
-            let btn_width = btn_columns * size_info.cell_width() as usize;
-            self.damage_tracker.frame().add_viewport_rect(
-                &size_info,
-                btn_x as i32,
-                0,
-                btn_width as i32,
-                size_info.cell_height() as i32,
-            );
-        }
-
-        // Draw tab bar if there are multiple tabs.
-        if let Some((tab_titles, active_index)) = tab_bar_info {
-            if tab_titles.len() > 1 {
-                let tab_bar_line: usize = 0;
-                let y = size_info.cell_height().mul_add(0.0, size_info.padding_y());
-                let width = size_info.width() as f32;
-
-                // Background for the tab bar.
-                let tab_bar_bg = config.colors.primary.background;
-                let tab_bar_rect = RenderRect::new(0., y, width, size_info.cell_height(), tab_bar_bg, 1.);
-                rects.push(tab_bar_rect);
-
-                // Highlight active tab.
-                let tab_bar_fg = config.colors.primary.foreground;
-                let active_tab_width = width / tab_titles.len() as f32;
-                let active_x = active_index as f32 * active_tab_width;
-                let active_rect =
-                    RenderRect::new(active_x, y, active_tab_width, size_info.cell_height(), tab_bar_fg, 1.);
-                rects.push(active_rect);
-
-                // Draw tab titles.
-                let glyph_cache = &mut self.glyph_cache;
-                let tab_bar_width = size_info.columns();
-                let chars_per_tab = std::cmp::max(tab_bar_width / tab_titles.len() - 1, 1);
-
-                let mut current_column = Column(0);
-                for (i, title) in tab_titles.iter().enumerate() {
-                    let (fg, bg) = if i == active_index {
-                        (config.colors.primary.background, config.colors.primary.foreground)
-                    } else {
-                        (config.colors.primary.foreground, config.colors.primary.background)
-                    };
-
-                    let display_string: String =
-                        StrShortener::new(title, chars_per_tab, ShortenDirection::Right, Some('.'))
-                            .collect();
-
-                    let point = Point::new(tab_bar_line, current_column);
-                    self.renderer.draw_string(
-                        point,
-                        fg,
-                        bg,
-                        display_string.chars(),
-                        &size_info,
-                        glyph_cache,
-                    );
-
-                    current_column.0 += chars_per_tab + 1;
-                }
-
-                // Always damage the tab bar.
+            if tabs_visible {
+                let tab_bar_height = effective_tab_bar_height(config, size_info.cell_height());
                 self.damage_tracker.frame().add_viewport_rect(
                     &size_info,
                     0,
                     0,
                     size_info.width() as i32,
+                    tab_bar_height as i32,
+                );
+            } else {
+                let btn_columns = 3;
+                let btn_x = (size_info.columns() - btn_columns) * size_info.cell_width() as usize;
+                let btn_width = btn_columns * size_info.cell_width() as usize;
+                self.damage_tracker.frame().add_viewport_rect(
+                    &size_info,
+                    btn_x as i32,
+                    0,
+                    btn_width as i32,
                     size_info.cell_height() as i32,
+                );
+            }
+        }
+
+        // Draw tab bar if there are multiple tabs.
+        if let Some((tab_titles, active_index)) = tab_bar_info {
+            if tab_titles.len() > 1 {
+                let tab_config = &config.window.tab_bar;
+                let tab_bar_height = effective_tab_bar_height(config, size_info.cell_height());
+                let y = 0.;
+                let width = size_info.width() as f32;
+
+                // Background for the entire tab bar.
+                let tab_bar_bg = config.colors.primary.background;
+                rects.push(RenderRect::new(0., y, width, tab_bar_height, tab_bar_bg, 1.));
+
+                // Fit tabs into the available width while leaving breathing room for the close
+                // button on the right.
+                let tab_count = tab_titles.len();
+                let tab_padding = 8.0;
+                let close_btn_slot = if matches!(config.window.decorations, Decorations::None) {
+                    let (close_btn_x, _, _, _) = tab_bar_close_button_bounds(&size_info, config);
+                    width - size_info.padding_x() - close_btn_x + tab_padding
+                } else {
+                    0.0
+                };
+                let tab_start_x = size_info.padding_x();
+                let tab_end_x = width - size_info.padding_x() - close_btn_slot;
+                let available_width =
+                    (tab_end_x - tab_start_x - (tab_count.saturating_sub(1) as f32 * tab_padding))
+                        .max(size_info.cell_width() * tab_count as f32);
+                let tab_width = available_width / tab_count as f32;
+
+                for (i, title) in tab_titles.iter().enumerate() {
+                    let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
+
+                    let (_fg, bg) = if i == active_index {
+                        (tab_config.text_color, tab_config.active_color)
+                    } else {
+                        (tab_config.text_color, tab_config.inactive_color)
+                    };
+
+                    // Tab background rectangle.
+                    let tab_rect_height = (tab_bar_height - 6.0).max(18.0);
+                    let tab_rect_y = y + (tab_bar_height - tab_rect_height) / 2.0;
+                    rects.push(RenderRect::new(
+                        tab_x,
+                        tab_rect_y,
+                        tab_width,
+                        tab_rect_height,
+                        bg,
+                        1.,
+                    ));
+
+                    let max_chars = (tab_width / size_info.cell_width()) as usize;
+                    let _display_string: String = StrShortener::new(
+                        title,
+                        std::cmp::max(max_chars, 1),
+                        ShortenDirection::Right,
+                        Some('.'),
+                    )
+                    .collect();
+                }
+
+                if matches!(config.window.decorations, Decorations::None) {
+                    let close_bg = if close_button_hovered {
+                        Rgb::new(60, 25, 25)
+                    } else {
+                        Rgb::new(30, 30, 45)
+                    };
+                    let (btn_x, btn_y, btn_w, btn_h) =
+                        tab_bar_close_button_bounds(&size_info, config);
+                    rects.push(RenderRect::new(btn_x, btn_y, btn_w, btn_h, close_bg, 1.));
+                }
+
+                // Always damage the tab bar area.
+                self.damage_tracker.frame().add_viewport_rect(
+                    &size_info,
+                    0,
+                    0,
+                    size_info.width() as i32,
+                    tab_bar_height as i32,
                 );
             }
         }
@@ -1084,7 +1180,9 @@ impl Display {
 
             // Create a new rectangle for the background.
             let start_line = size_info.screen_lines() + search_offset;
-            let y = size_info.cell_height().mul_add(start_line as f32, size_info.padding_y());
+            let y = size_info
+                .cell_height()
+                .mul_add(start_line as f32, size_info.padding_y() + size_info.tab_bar_offset_y());
 
             let bg = match message.ty() {
                 MessageType::Error => config.colors.normal.red,
@@ -1123,6 +1221,91 @@ impl Display {
         } else {
             // Draw rectangles.
             self.renderer.draw_rects(&size_info, &metrics, rects);
+        }
+
+        if let Some((tab_titles, active_index)) =
+            tab_bar_info.filter(|(titles, _)| titles.len() > 1)
+        {
+            let glyph_cache = &mut self.glyph_cache;
+            let tab_config = &config.window.tab_bar;
+            let width = size_info.width();
+            let tab_count = tab_titles.len();
+            let tab_padding = 8.0;
+            let close_btn_slot = if matches!(config.window.decorations, Decorations::None) {
+                let (close_btn_x, _, _, _) = tab_bar_close_button_bounds(&size_info, config);
+                width - size_info.padding_x() - close_btn_x + tab_padding
+            } else {
+                0.0
+            };
+            let tab_start_x = size_info.padding_x();
+            let tab_end_x = width - size_info.padding_x() - close_btn_slot;
+            let available_width =
+                (tab_end_x - tab_start_x - (tab_count.saturating_sub(1) as f32 * tab_padding))
+                    .max(size_info.cell_width() * tab_count as f32);
+            let tab_width = available_width / tab_count as f32;
+            let tab_text_size_info = size_info.with_tab_bar_offset(0.0);
+
+            for (i, title) in tab_titles.iter().enumerate() {
+                let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
+                let (fg, _) = if i == active_index {
+                    (tab_config.text_color, tab_config.active_color)
+                } else {
+                    (tab_config.text_color, tab_config.inactive_color)
+                };
+
+                let max_chars = (tab_width / size_info.cell_width()) as usize;
+                let display_string: String = StrShortener::new(
+                    title,
+                    std::cmp::max(max_chars, 1),
+                    ShortenDirection::Right,
+                    Some('.'),
+                )
+                .collect();
+
+                let text_pixel_width = display_string.len() as f32 * size_info.cell_width();
+                let text_x = tab_x + (tab_width - text_pixel_width) / 2.0;
+                let text_col = ((text_x - tab_text_size_info.padding_x()) / size_info.cell_width())
+                    .ceil() as usize;
+                let point = Point::new(0, Column(text_col));
+                self.renderer.draw_string(
+                    point,
+                    fg,
+                    config.colors.primary.background,
+                    display_string.chars(),
+                    &tab_text_size_info,
+                    glyph_cache,
+                );
+            }
+
+            if matches!(config.window.decorations, Decorations::None) {
+                let (fg, close_bg) = if close_button_hovered {
+                    (Rgb::new(220, 80, 75), Rgb::new(60, 25, 25))
+                } else {
+                    (Rgb::new(120, 120, 140), Rgb::new(30, 30, 45))
+                };
+                // Special-case the close glyph so it can be centered with sub-cell precision
+                // inside the tab-bar pill, instead of snapping to the normal tab text grid.
+                let mut close_btn_size_info = tab_text_size_info.with_tab_bar_offset(-4.0);
+                let (close_btn_x, _, close_btn_w, _) =
+                    tab_bar_close_button_bounds(&size_info, config);
+                let text_x = close_btn_x + (close_btn_w - size_info.cell_width()) / 2.0;
+                let cell_width = size_info.cell_width();
+                let text_col =
+                    ((text_x - close_btn_size_info.padding_x()) / cell_width).floor().max(0.0)
+                        as usize;
+                let snapped_x =
+                    close_btn_size_info.padding_x() + text_col as f32 * cell_width;
+                close_btn_size_info.padding_x += text_x - snapped_x;
+                let point = Point::new(0, Column(text_col));
+                self.renderer.draw_string(
+                    point,
+                    fg,
+                    close_bg,
+                    "✕".chars(),
+                    &close_btn_size_info,
+                    glyph_cache,
+                );
+            }
         }
 
         self.draw_render_timer(config);

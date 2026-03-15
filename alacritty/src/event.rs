@@ -1845,7 +1845,8 @@ impl Mouse {
         let col = self.x.saturating_sub(size.padding_x() as usize) / (size.cell_width() as usize);
         let col = min(Column(col), size.last_column());
 
-        let line = self.y.saturating_sub(size.padding_y() as usize) / (size.cell_height() as usize);
+        let grid_top = (size.padding_y() + size.tab_bar_offset_y()) as usize;
+        let line = self.y.saturating_sub(grid_top) / (size.cell_height() as usize);
         let line = min(line, size.bottommost_line().0 as usize);
 
         term::viewport_to_point(display_offset, Point::new(line, col))

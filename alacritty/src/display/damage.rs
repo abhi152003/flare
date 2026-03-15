@@ -150,12 +150,16 @@ impl FrameDamage {
     /// Damage line for the given frame.
     #[inline]
     pub fn damage_line(&mut self, damage: LineDamageBounds) {
-        self.lines[damage.line].expand(damage.left, damage.right);
+        if let Some(line) = self.lines.get_mut(damage.line) {
+            line.expand(damage.left, damage.right);
+        }
     }
 
     #[inline]
     pub fn damage_point(&mut self, point: Point<usize>) {
-        self.lines[point.line].expand(point.column.0, point.column.0);
+        if let Some(line) = self.lines.get_mut(point.line) {
+            line.expand(point.column.0, point.column.0);
+        }
     }
 
     /// Mark the frame as fully damaged.
@@ -316,6 +320,7 @@ mod tests {
             2.,
             2.,
             true,
+            0.0,
         )
         .into();
 
@@ -359,14 +364,12 @@ mod tests {
         let y = 40;
         let height = 5;
         let width = 10;
-        let size_info = SizeInfo::new(viewport_height, viewport_height, 5., 5., 0., 0., true);
+        let size_info = SizeInfo::new(viewport_height, viewport_height, 5., 5., 0., 0., true, 0.0);
         frame_damage.add_viewport_rect(&size_info, x, y, width, height);
-        assert_eq!(frame_damage.rects[0], Rect {
-            x,
-            y: viewport_height as i32 - y - height,
-            width,
-            height
-        });
+        assert_eq!(
+            frame_damage.rects[0],
+            Rect { x, y: viewport_height as i32 - y - height, width, height }
+        );
         assert_eq!(frame_damage.rects[0].y, viewport_y_to_damage_y(&size_info, y, height));
         assert_eq!(damage_y_to_viewport_y(&size_info, &frame_damage.rects[0]), y);
     }

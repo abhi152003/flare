@@ -171,8 +171,7 @@ impl TabManager {
 
     /// Add a pre-built tab to the manager.
     pub fn add_tab(&mut self, tab: Tab) {
-        let title = Tab::auto_title(self.tabs.len());
-        self.tabs.push(Tab { root: tab.root, title });
+        self.tabs.push(tab);
         self.active_tab_index = self.tabs.len() - 1;
     }
 }

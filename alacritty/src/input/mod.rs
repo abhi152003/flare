@@ -43,7 +43,7 @@ use crate::config::{
 };
 use crate::display::hint::HintMatch;
 use crate::display::window::{ImeInhibitor, Window};
-use crate::display::{Display, SizeInfo};
+use crate::display::{Display, SizeInfo, tab_bar_close_button_bounds};
 use crate::event::{
     ClickState, Event, EventType, InlineSearchState, Mouse, TouchPurpose, TouchZoom,
 };
@@ -1100,17 +1100,27 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
 
         let size_info = self.ctx.size_info();
         let mouse = self.ctx.mouse();
-        let btn_columns = 3;
-        let padding_x = size_info.padding_x() as usize;
-        let padding_y = size_info.padding_y() as usize;
-        let cell_width = size_info.cell_width() as usize;
-        let cell_height = size_info.cell_height() as usize;
 
-        let btn_start_x = padding_x + size_info.columns().saturating_sub(btn_columns) * cell_width;
-        let btn_end_x = btn_start_x + btn_columns * cell_width;
-        let btn_end_y = padding_y + cell_height;
+        if size_info.tab_bar_offset_y() > 0.0 {
+            // Tabs are visible: close button is in the tab bar area (pixel-based).
+            let (btn_x, btn_y, btn_w, btn_h) =
+                tab_bar_close_button_bounds(&size_info, self.ctx.config());
 
-        mouse.x >= btn_start_x && mouse.x <= btn_end_x && mouse.y >= padding_y && mouse.y <= btn_end_y
+            let mouse_x = mouse.x as f32;
+            let mouse_y = mouse.y as f32;
+
+            mouse_x >= btn_x
+                && mouse_x <= btn_x + btn_w
+                && mouse_y >= btn_y
+                && mouse_y <= btn_y + btn_h
+        } else {
+            // No tabs: close button is at viewport row 0, last 3 columns.
+            let btn_columns = 3;
+            let point = mouse.point(&size_info, 0);
+
+            point.line == 0
+                && point.column.0 >= size_info.columns().saturating_sub(btn_columns)
+        }
     }
 
     /// Check mouse icon state in relation to the message bar.
@@ -1357,6 +1367,7 @@ mod tests {
                     0.,
                     0.,
                     false,
+                    0.0,
                 );
 
                 let mut terminal = Term::new(cfg.term_options(), &size, MockEventProxy);

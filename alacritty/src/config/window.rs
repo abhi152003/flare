@@ -17,6 +17,16 @@ use crate::display::color::Rgb;
 /// Default name, used for window title and class.
 pub const DEFAULT_NAME: &str = "Flare";
 
+/// Tab bar style.
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabBarStyle {
+    /// Simple flat tabs.
+    Flat,
+    /// Tabs with a rounded pill indicator on the active tab.
+    #[default]
+    Rounded,
+}
+
 /// Gradient configuration for the terminal background.
 #[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct GradientConfig {
@@ -52,6 +62,38 @@ pub enum GradientDirection {
 
     /// Gradient flows diagonally from top-left to bottom-right.
     Diagonal,
+}
+
+/// Tab bar configuration.
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
+pub struct TabBarConfig {
+    /// Visual style of the tab bar.
+    #[serde(default)]
+    pub style: TabBarStyle,
+
+    /// Color for the active tab's highlight.
+    pub active_color: Rgb,
+
+    /// Color for inactive tabs.
+    pub inactive_color: Rgb,
+
+    /// Text color for tab titles.
+    pub text_color: Rgb,
+
+    /// Height of the tab bar in pixels.
+    pub height: u16,
+}
+
+impl Default for TabBarConfig {
+    fn default() -> Self {
+        Self {
+            style: TabBarStyle::default(),
+            active_color: Rgb::new(0x5d, 0xad, 0xec),
+            inactive_color: Rgb::new(0x3b, 0x42, 0x58),
+            text_color: Rgb::new(0xc0, 0xca, 0xf5),
+            height: 36,
+        }
+    }
 }
 
 #[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
@@ -92,6 +134,9 @@ pub struct WindowConfig {
     /// Rounded corner radius in pixels. 0 means no rounding.
     pub border_radius: f32,
 
+    /// Tab bar configuration.
+    pub tab_bar: TabBarConfig,
+
     /// Controls which `Option` key should be treated as `Alt`.
     option_as_alt: OptionAsAlt,
 
@@ -131,6 +176,7 @@ impl Default for WindowConfig {
             level: Default::default(),
             background_gradient: Default::default(),
             border_radius: 0.0,
+            tab_bar: Default::default(),
         }
     }
 }

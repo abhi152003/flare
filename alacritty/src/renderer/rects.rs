@@ -465,7 +465,8 @@ impl RectShaderProgram {
         let position = (0.5 * metrics.descent).abs();
         let underline_position = metrics.descent.abs() - metrics.underline_position.abs();
 
-        let viewport_height = size_info.height() - size_info.padding_y();
+        let viewport_height =
+            size_info.height() - size_info.padding_y() - size_info.tab_bar_offset_y();
         let padding_y = viewport_height
             - (viewport_height / size_info.cell_height()).floor() * size_info.cell_height();
 
