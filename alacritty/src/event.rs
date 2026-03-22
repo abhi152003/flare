@@ -296,16 +296,14 @@ impl ApplicationHandler<Event> for Processor {
                 let mut options = ParsedOptions::from_options(&ipc_config.options);
                 let option_strings = ipc_config.options.clone();
 
-                if window_id.is_none() {
-                    let persistence_result = if ipc_config.reset {
-                        config::clear_runtime_overrides(&self.config.config_paths)
-                    } else {
-                        config::persist_runtime_overrides(&self.config.config_paths, &option_strings)
-                    };
+                let persistence_result = if ipc_config.reset {
+                    config::clear_runtime_overrides(&self.config.config_paths)
+                } else {
+                    config::persist_runtime_overrides(&self.config.config_paths, &option_strings)
+                };
 
-                    if let Err(err) = persistence_result {
-                        error!("Failed to persist runtime config overrides: {err}");
-                    }
+                if let Err(err) = persistence_result {
+                    error!("Failed to persist runtime config overrides: {err}");
                 }
 
                 // Override IPC config for each window with matching ID.
