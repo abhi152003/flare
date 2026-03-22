@@ -1400,16 +1400,17 @@ impl Display {
 
         for (viewport, pane) in &pane_viewports {
             let is_active = std::ptr::eq(*pane, active_pane);
+            let pane_padding_bottom = size_info.height() - (viewport.y + viewport.height);
 
-            // Per-pane SizeInfo: use viewport coordinates as padding so the
-            // GL viewport starts at the pane's top-left corner.
+            // Per-pane SizeInfo for rendering. OpenGL viewports use a bottom-origin Y offset,
+            // so we must convert the pane's top-origin viewport into bottom-origin padding.
             let pane_size_info = SizeInfo::new(
                 viewport.width + 2.0 * viewport.x,
-                viewport.height + 2.0 * viewport.y,
+                viewport.height + 2.0 * pane_padding_bottom,
                 size_info.cell_width(),
                 size_info.cell_height(),
                 viewport.x,
-                viewport.y,
+                pane_padding_bottom,
                 false,
                 0.0,
             );
@@ -1439,7 +1440,8 @@ impl Display {
                 self.damage_tracker.frame().mark_fully_damaged();
             }
 
-            let mut content = RenderableContent::new(config, self, &terminal, search_state);
+            let mut content =
+                RenderableContent::new_with_size(config, self, &terminal, search_state, pane_size_info);
             let mut grid_cells = Vec::new();
             for cell in &mut content {
                 grid_cells.push(cell);
@@ -1503,7 +1505,7 @@ impl Display {
         }
 
         // Draw split borders between panes.
-        self.draw_split_borders(&pane_viewports, &size_info, config, &metrics);
+        self.draw_split_decorations(&pane_viewports, active_pane, &size_info, config, &metrics);
 
         // Restore viewport to full size for tab bar / message bar rendering.
         self.renderer.set_viewport(&size_info);
@@ -1590,30 +1592,75 @@ impl Display {
         self.damage_tracker.swap_damage();
     }
 
-    /// Draw thin borders between split panes.
-    fn draw_split_borders(
+    /// Draw pane borders and a subtle dimming overlay for inactive panes.
+    fn draw_split_decorations(
         &mut self,
         pane_viewports: &[(PaneViewport, &tab::Pane)],
+        active_pane: &tab::Pane,
         size_info: &SizeInfo,
         config: &UiConfig,
         metrics: &crossfont::Metrics,
     ) {
-        let border_color = config.colors.primary.background;
-        let border_width = 2.0;
+        let border_width = 1.0;
+        let inactive_overlay_alpha = 0.14;
+        let mut rects = Vec::with_capacity(pane_viewports.len() * 5);
 
-        for (viewport, _) in pane_viewports {
-            self.renderer.draw_rects(
-                size_info,
-                metrics,
-                vec![RenderRect::new(
-                    viewport.x - border_width / 2.0,
-                    viewport.y - border_width / 2.0,
-                    viewport.width + border_width,
-                    viewport.height + border_width,
-                    border_color,
-                    0.3,
-                )],
-            );
+        for (viewport, pane) in pane_viewports {
+            let is_active = std::ptr::eq(*pane, active_pane);
+            let border_color = if is_active {
+                config.window.tab_bar.active_color
+            } else {
+                config.window.tab_bar.inactive_color
+            };
+            let border_alpha = if is_active { 0.9 } else { 0.5 };
+
+            if !is_active {
+                rects.push(RenderRect::new(
+                    viewport.x,
+                    viewport.y,
+                    viewport.width,
+                    viewport.height,
+                    config.colors.primary.background,
+                    inactive_overlay_alpha,
+                ));
+            }
+
+            rects.push(RenderRect::new(
+                viewport.x,
+                viewport.y,
+                viewport.width,
+                border_width,
+                border_color,
+                border_alpha,
+            ));
+            rects.push(RenderRect::new(
+                viewport.x,
+                viewport.y + viewport.height - border_width,
+                viewport.width,
+                border_width,
+                border_color,
+                border_alpha,
+            ));
+            rects.push(RenderRect::new(
+                viewport.x,
+                viewport.y,
+                border_width,
+                viewport.height,
+                border_color,
+                border_alpha,
+            ));
+            rects.push(RenderRect::new(
+                viewport.x + viewport.width - border_width,
+                viewport.y,
+                border_width,
+                viewport.height,
+                border_color,
+                border_alpha,
+            ));
+        }
+
+        if !rects.is_empty() {
+            self.renderer.draw_rects(size_info, metrics, rects);
         }
     }
 

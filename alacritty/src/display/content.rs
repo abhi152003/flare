@@ -34,7 +34,7 @@ pub struct RenderableContent<'a> {
     config: &'a UiConfig,
     colors: &'a List,
     focused_match: Option<&'a Match>,
-    size: &'a SizeInfo,
+    size: SizeInfo,
 }
 
 impl<'a> RenderableContent<'a> {
@@ -43,6 +43,16 @@ impl<'a> RenderableContent<'a> {
         display: &'a mut Display,
         term: &'a Term<T>,
         search_state: &'a mut SearchState,
+    ) -> Self {
+        Self::new_with_size(config, display, term, search_state, display.size_info)
+    }
+
+    pub fn new_with_size<T: EventListener>(
+        config: &'a UiConfig,
+        display: &'a mut Display,
+        term: &'a Term<T>,
+        search_state: &'a mut SearchState,
+        size: SizeInfo,
     ) -> Self {
         let search = search_state.dfas().map(|dfas| HintMatches::visible_regex_matches(term, dfas));
         let focused_match = search_state.focused_match();
@@ -75,7 +85,7 @@ impl<'a> RenderableContent<'a> {
 
         Self {
             colors: &display.colors,
-            size: &display.size_info,
+            size,
             cursor: RenderableCursor::new_hidden(),
             terminal_content,
             focused_match,

@@ -456,8 +456,10 @@ impl WindowContext {
             .find_map(|(viewport, pane)| std::ptr::eq(pane, active_pane).then_some(viewport))?;
 
         Some(crate::display::SizeInfo::new(
-            viewport.width,
-            viewport.height,
+            // Match the pane-local SizeInfo used during rendering so input,
+            // cursor movement, and selection use the same pane geometry.
+            viewport.width + 2.0 * viewport.x,
+            viewport.height + 2.0 * viewport.y,
             base.cell_width(),
             base.cell_height(),
             viewport.x,

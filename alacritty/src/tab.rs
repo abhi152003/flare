@@ -129,13 +129,21 @@ impl PaneNode {
                     second: Box::new(PaneNode::Leaf(new_pane)),
                 };
             },
-            PaneNode::Split { first, second, .. } => {
+            PaneNode::Split { direction: split_direction, ratio, first, second } => {
                 if first.has_active() {
                     first.split_active(direction, new_pane);
                 } else if second.has_active() {
                     second.split_active(direction, new_pane);
                 } else {
                     first.split_active(direction, new_pane);
+                }
+
+                // Rebalance repeated splits in the same direction so panes share the
+                // full tab area instead of only subdividing the most recently active pane.
+                if *split_direction == direction {
+                    let first_count = first.pane_count() as f32;
+                    let second_count = second.pane_count() as f32;
+                    *ratio = first_count / (first_count + second_count);
                 }
             },
         }
@@ -147,7 +155,7 @@ impl PaneNode {
     pub fn close_active(&mut self) -> Option<Pane> {
         match self {
             PaneNode::Leaf(_) => None,
-            PaneNode::Split { first, second, .. } => {
+            PaneNode::Split { direction: split_direction, ratio, first, second } => {
                 if first.has_active() && first.is_leaf() {
                     // Active pane is first (leaf). Replace this split with second,
                     // returning the pane from first.
@@ -179,13 +187,35 @@ impl PaneNode {
                 }
 
                 if first.has_active() {
+                    let rebalance_current = matches!(
+                        &**first,
+                        PaneNode::Split { direction: child_direction, .. }
+                            if *child_direction == *split_direction
+                    );
                     if let Some(removed) = first.close_active() {
+                        if rebalance_current {
+                            let first_count = first.pane_count() as f32;
+                            let second_count = second.pane_count() as f32;
+                            *ratio = first_count / (first_count + second_count);
+                        }
                         return Some(removed);
                     }
                 }
 
                 if second.has_active() {
-                    return second.close_active();
+                    let rebalance_current = matches!(
+                        &**second,
+                        PaneNode::Split { direction: child_direction, .. }
+                            if *child_direction == *split_direction
+                    );
+                    if let Some(removed) = second.close_active() {
+                        if rebalance_current {
+                            let first_count = first.pane_count() as f32;
+                            let second_count = second.pane_count() as f32;
+                            *ratio = first_count / (first_count + second_count);
+                        }
+                        return Some(removed);
+                    }
                 }
 
                 None
