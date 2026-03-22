@@ -7,7 +7,7 @@ use alacritty_terminal::event_loop::Notifier;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 
-use crate::event::{EventProxy, SearchState};
+use crate::event::EventProxy;
 
 /// Direction for pane splits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,22 +65,6 @@ impl PaneNode {
         }
     }
 
-    /// Get mutable reference to the currently active pane.
-    pub fn active_pane_mut(&mut self) -> &mut Pane {
-        match self {
-            PaneNode::Leaf(pane) => pane,
-            PaneNode::Split { first, second, .. } => {
-                if first.has_active() {
-                    first.active_pane_mut()
-                } else if second.has_active() {
-                    second.active_pane_mut()
-                } else {
-                    first.active_pane_mut()
-                }
-            },
-        }
-    }
-
     /// Total number of leaf panes.
     pub fn pane_count(&self) -> usize {
         match self {
@@ -115,7 +99,6 @@ impl PaneNode {
                 let existing = Pane {
                     terminal: pane.terminal.clone(),
                     notifier: pane.notifier.clone(),
-                    search_state: SearchState::default(),
                     active: false,
                     #[cfg(not(windows))]
                     master_fd: pane.master_fd,
@@ -219,48 +202,6 @@ impl PaneNode {
                 }
 
                 None
-            },
-        }
-    }
-
-    /// Navigate focus to the adjacent pane in the given direction.
-    ///
-    /// Returns `true` if focus was changed.
-    pub fn navigate(&mut self, direction: SplitDirection, reverse: bool) -> bool {
-        match self {
-            PaneNode::Leaf(_) => false,
-            PaneNode::Split { direction: split_dir, first, second, .. } => {
-                if *split_dir != direction {
-                    if first.has_active() {
-                        first.navigate(direction, reverse)
-                    } else if second.has_active() {
-                        second.navigate(direction, reverse)
-                    } else {
-                        false
-                    }
-                } else if first.has_active() {
-                    if first.navigate(direction, reverse) {
-                        true
-                    } else if !reverse {
-                        first.clear_active();
-                        second.ensure_active_first();
-                        true
-                    } else {
-                        false
-                    }
-                } else if second.has_active() {
-                    if second.navigate(direction, reverse) {
-                        true
-                    } else if reverse {
-                        second.clear_active();
-                        first.ensure_active_last();
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                }
             },
         }
     }
@@ -405,7 +346,6 @@ impl PaneNode {
 pub struct Pane {
     pub terminal: Arc<FairMutex<Term<EventProxy>>>,
     pub notifier: Notifier,
-    pub search_state: SearchState,
     pub active: bool,
     #[cfg(not(windows))]
     pub master_fd: std::os::unix::io::RawFd,
@@ -419,19 +359,14 @@ impl fmt::Debug for Pane {
     }
 }
 
-/// A single tab containing a tree of panes and a title.
+/// A single tab containing a tree of panes.
 pub struct Tab {
     pub root: PaneNode,
-    pub title: String,
 }
 
 impl Tab {
     pub fn active_pane(&self) -> &Pane {
         self.root.active_pane()
-    }
-
-    pub fn active_pane_mut(&mut self) -> &mut Pane {
-        self.root.active_pane_mut()
     }
 
     pub fn pane_count(&self) -> usize {
@@ -577,18 +512,6 @@ impl TabManager {
     pub fn select_tab(&mut self, index: usize) {
         if index < self.tabs.len() {
             self.active_tab_index = index;
-        }
-    }
-
-    pub fn select_next_tab(&mut self) {
-        if self.tabs.len() > 1 {
-            self.active_tab_index = (self.active_tab_index + 1) % self.tabs.len();
-        }
-    }
-
-    pub fn select_previous_tab(&mut self) {
-        if self.tabs.len() > 1 {
-            self.active_tab_index = (self.active_tab_index + self.tabs.len() - 1) % self.tabs.len();
         }
     }
 

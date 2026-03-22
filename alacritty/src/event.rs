@@ -678,7 +678,6 @@ pub enum TabAction {
     CloseTab,
     NextTab,
     PreviousTab,
-    SelectTab(usize),
     // Pane actions.
     SplitPaneHorizontal,
     SplitPaneVertical,

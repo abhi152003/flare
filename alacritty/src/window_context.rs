@@ -242,15 +242,13 @@ impl WindowContext {
         let initial_pane = tab::Pane {
             terminal: Arc::clone(&terminal),
             notifier: Notifier(loop_tx.clone()),
-            search_state: SearchState::default(),
             active: true,
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
             shell_pid,
         };
-        let initial_tab =
-            tab::Tab { root: tab::PaneNode::Leaf(initial_pane), title: tab::Tab::auto_title(0) };
+        let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane) };
         let mut tab_manager = TabManager::new();
         tab_manager.add_tab(initial_tab);
 
@@ -837,7 +835,6 @@ impl WindowContext {
         let pane = tab::Pane {
             terminal: Arc::clone(&terminal),
             notifier: Notifier(loop_tx),
-            search_state: SearchState::default(),
             active: true,
             #[cfg(not(windows))]
             master_fd,
@@ -845,10 +842,7 @@ impl WindowContext {
             shell_pid,
         };
 
-        let new_tab = tab::Tab {
-            root: tab::PaneNode::Leaf(pane),
-            title: tab::Tab::auto_title(self.tab_manager.tab_count()),
-        };
+        let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane) };
 
         // Store the new tab's terminal state for later activation.
         self.tab_manager.add_tab(new_tab);
@@ -1008,7 +1002,6 @@ impl WindowContext {
         Some(tab::Pane {
             terminal,
             notifier: Notifier(loop_tx),
-            search_state: SearchState::default(),
             active: true,
             #[cfg(not(windows))]
             master_fd,
@@ -1035,11 +1028,6 @@ impl WindowContext {
                     let len = self.tab_manager.tab_count();
                     let new_index = (self.tab_manager.active_tab_index() + len - 1) % len;
                     self.activate_tab(new_index, proxy);
-                }
-            },
-            TabAction::SelectTab(index) => {
-                if index < self.tab_manager.tab_count() {
-                    self.activate_tab(index, proxy);
                 }
             },
             TabAction::SplitPaneHorizontal => {
