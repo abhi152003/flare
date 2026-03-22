@@ -608,8 +608,9 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         "8",    ModifiersState::ALT;                                             Action::SelectTab8;
         "9",    ModifiersState::ALT;                                             Action::SelectLastTab;
         // Flare pane keybindings.
-        "|",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::SplitPaneVertical;
-        "-",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::SplitPaneHorizontal;
+        "e",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::SplitPaneVertical;
+        "o",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::SplitPaneHorizontal;
+        "w",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::ClosePane;
         ArrowLeft,  ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneLeft;
         ArrowRight, ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneRight;
         ArrowUp,    ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneUp;

@@ -51,6 +51,8 @@ use crate::display::hint::{HintMatch, HintState};
 use crate::display::meter::Meter;
 use crate::display::window::Window;
 use crate::event::{Event, EventType, Mouse, SearchState};
+use crate::gl;
+use crate::tab::{self, PaneViewport};
 use crate::message_bar::{MessageBuffer, MessageType};
 use crate::renderer::rects::{RenderLine, RenderLines, RenderRect};
 use crate::renderer::{self, platform, GlyphCache, Renderer};
@@ -1346,6 +1348,416 @@ impl Display {
         self.damage_tracker.swap_damage();
     }
 
+    /// Draw all panes in a split-view tab.
+    ///
+    /// Each leaf pane's terminal is rendered into its own viewport region,
+    /// with thin borders drawn between panes.
+    pub fn draw_panes(
+        &mut self,
+        tab: &tab::Tab,
+        scheduler: &mut Scheduler,
+        message_buffer: &MessageBuffer,
+        config: &UiConfig,
+        search_state: &mut SearchState,
+        tab_bar_info: Option<(&[String], usize)>,
+        close_button_hovered: bool,
+    ) {
+        let size_info = self.size_info;
+        let metrics = self.glyph_cache.font_metrics();
+
+        self.make_current();
+
+        // Draw gradient or flat background over the full window.
+        if let Some(ref gradient) = config.window.background_gradient {
+            self.renderer.draw_gradient(
+                &size_info,
+                gradient,
+                config.window_opacity(),
+                config.window.border_radius,
+            );
+        } else {
+            self.renderer.clear(
+                config.colors.primary.background,
+                config.window_opacity(),
+            );
+        }
+
+        self.damage_tracker.frame().mark_fully_damaged();
+        self.damage_tracker.next_frame().mark_fully_damaged();
+
+        // Compute the viewport below the tab bar. `tab_bar_offset_y` already reserves the full
+        // vertical space for the bar and its gap, so it must not be added again here.
+        let content_y = size_info.padding_y() + size_info.tab_bar_offset_y();
+        let content_x = size_info.padding_x();
+        let content_width = size_info.width() - 2.0 * size_info.padding_x();
+        let content_height =
+            size_info.height() - 2.0 * size_info.padding_y() - size_info.tab_bar_offset_y();
+
+        let full_viewport = PaneViewport::new(content_x, content_y, content_width, content_height);
+        let pane_viewports = tab.pane_viewports(full_viewport);
+
+        let active_pane = tab.active_pane();
+
+        for (viewport, pane) in &pane_viewports {
+            let is_active = std::ptr::eq(*pane, active_pane);
+
+            // Per-pane SizeInfo: use viewport coordinates as padding so the
+            // GL viewport starts at the pane's top-left corner.
+            let pane_size_info = SizeInfo::new(
+                viewport.width + 2.0 * viewport.x,
+                viewport.height + 2.0 * viewport.y,
+                size_info.cell_width(),
+                size_info.cell_height(),
+                viewport.x,
+                viewport.y,
+                false,
+                0.0,
+            );
+
+            // Clip rendering to the pane region using glScissor.
+            let screen_height = size_info.height() as i32;
+            let gl_x = viewport.x as i32;
+            let gl_y = (screen_height - (viewport.y + viewport.height) as i32).max(0);
+            let gl_w = viewport.width as i32;
+            let gl_h = viewport.height as i32;
+            unsafe {
+                gl::Enable(gl::SCISSOR_TEST);
+                gl::Scissor(gl_x, gl_y, gl_w, gl_h);
+            }
+
+            self.renderer.set_viewport(&pane_size_info);
+
+            // Lock this pane's terminal and render its content.
+            let mut terminal = pane.terminal.lock();
+
+            if terminal.screen_lines() != pane_size_info.screen_lines()
+                || terminal.columns() != pane_size_info.columns()
+            {
+                let mut notifier = pane.notifier.clone();
+                notifier.on_resize(pane_size_info.into());
+                terminal.resize(pane_size_info);
+                self.damage_tracker.frame().mark_fully_damaged();
+            }
+
+            let mut content = RenderableContent::new(config, self, &terminal, search_state);
+            let mut grid_cells = Vec::new();
+            for cell in &mut content {
+                grid_cells.push(cell);
+            }
+            let selection_range = content.selection_range();
+            let foreground_color = content.color(NamedColor::Foreground as usize);
+            let background_color = content.color(NamedColor::Background as usize);
+            let display_offset = content.display_offset();
+            let cursor = content.cursor();
+
+            match terminal.damage() {
+                TermDamage::Full => self.damage_tracker.frame().mark_fully_damaged(),
+                TermDamage::Partial(damaged_lines) => {
+                    for damage in damaged_lines {
+                        self.damage_tracker.frame().damage_line(damage);
+                    }
+                },
+            }
+            terminal.reset_damage();
+            drop(terminal);
+
+            // Draw grid cells with underline/strikeout tracking.
+            let mut lines = RenderLines::new();
+            {
+                let _sampler = self.meter.sampler();
+                let glyph_cache = &mut self.glyph_cache;
+
+                let cells = grid_cells.into_iter().map(|cell| {
+                    lines.update(&cell);
+                    cell
+                });
+                self.renderer.draw_cells(&pane_size_info, glyph_cache, cells);
+            }
+
+            // Draw rects (underlines, strikeouts, cursor, visual bell).
+            let mut pane_rects = lines.rects(&metrics, &pane_size_info);
+
+            if is_active {
+                pane_rects.extend(cursor.rects(&pane_size_info, config.cursor.thickness()));
+
+                let visual_bell_intensity = self.visual_bell.intensity();
+                if visual_bell_intensity != 0. {
+                    pane_rects.push(RenderRect::new(
+                        0.,
+                        0.,
+                        pane_size_info.width(),
+                        pane_size_info.height(),
+                        config.bell.color,
+                        visual_bell_intensity as f32,
+                    ));
+                }
+            }
+
+            self.renderer.draw_rects(&pane_size_info, &metrics, pane_rects);
+
+            unsafe {
+                gl::Disable(gl::SCISSOR_TEST);
+            }
+
+            let _ = (selection_range, display_offset, foreground_color, background_color);
+        }
+
+        // Draw split borders between panes.
+        self.draw_split_borders(&pane_viewports, &size_info, config, &metrics);
+
+        // Restore viewport to full size for tab bar / message bar rendering.
+        self.renderer.set_viewport(&size_info);
+
+        // Draw tab bar.
+        if let Some((tab_titles, active_index)) = tab_bar_info {
+            if tab_titles.len() > 1 {
+                self.draw_tab_bar(
+                    config,
+                    &size_info,
+                    &metrics,
+                    tab_titles,
+                    active_index,
+                    close_button_hovered,
+                );
+            }
+        } else if matches!(config.window.decorations, Decorations::None) {
+            let glyph_cache = &mut self.glyph_cache;
+            let (fg, bg) = if close_button_hovered {
+                (Rgb::new(220, 80, 75), Rgb::new(60, 25, 25))
+            } else {
+                (Rgb::new(120, 120, 140), Rgb::new(30, 30, 45))
+            };
+            let btn_columns = 3;
+            let start_column = Column(size_info.columns().saturating_sub(btn_columns));
+            let point = Point::new(0, start_column);
+            self.renderer.draw_string(point, fg, bg, " ✕ ".chars(), &size_info, glyph_cache);
+        }
+
+        // Draw message bar if present.
+        if let Some(message) = message_buffer.message() {
+            let search_offset = usize::from(search_state.regex().is_some());
+            let text = message.text(&size_info);
+            let start_line = size_info.screen_lines() + search_offset;
+            let y = size_info
+                .cell_height()
+                .mul_add(start_line as f32, size_info.padding_y() + size_info.tab_bar_offset_y());
+            let bg = match message.ty() {
+                MessageType::Error => config.colors.normal.red,
+                MessageType::Warning => config.colors.normal.yellow,
+            };
+            let msg_rects = vec![RenderRect::new(
+                0.,
+                y,
+                size_info.width(),
+                size_info.height() - y,
+                bg,
+                1.,
+            )];
+            self.renderer.draw_rects(&size_info, &metrics, msg_rects);
+
+            let glyph_cache = &mut self.glyph_cache;
+            let fg = config.colors.primary.background;
+            for (i, msg_text) in text.iter().enumerate() {
+                let point = Point::new(start_line + i, Column(0));
+                self.renderer.draw_string(
+                    point,
+                    fg,
+                    bg,
+                    msg_text.chars(),
+                    &size_info,
+                    glyph_cache,
+                );
+            }
+        }
+
+        self.draw_render_timer(config);
+
+        self.window.pre_present_notify();
+
+        if self.damage_tracker.debug {
+            let damage = self.damage_tracker.shape_frame_damage(self.size_info.into());
+            let mut debug_rects = Vec::with_capacity(damage.len());
+            self.highlight_damage(&mut debug_rects);
+            self.renderer.draw_rects(&self.size_info, &metrics, debug_rects);
+        }
+
+        self.swap_buffers();
+
+        if !matches!(self.raw_window_handle, RawWindowHandle::Wayland(_)) {
+            self.request_frame(scheduler);
+        }
+
+        self.damage_tracker.swap_damage();
+    }
+
+    /// Draw thin borders between split panes.
+    fn draw_split_borders(
+        &mut self,
+        pane_viewports: &[(PaneViewport, &tab::Pane)],
+        size_info: &SizeInfo,
+        config: &UiConfig,
+        metrics: &crossfont::Metrics,
+    ) {
+        let border_color = config.colors.primary.background;
+        let border_width = 2.0;
+
+        for (viewport, _) in pane_viewports {
+            self.renderer.draw_rects(
+                size_info,
+                metrics,
+                vec![RenderRect::new(
+                    viewport.x - border_width / 2.0,
+                    viewport.y - border_width / 2.0,
+                    viewport.width + border_width,
+                    viewport.height + border_width,
+                    border_color,
+                    0.3,
+                )],
+            );
+        }
+    }
+
+    /// Draw the full tab bar (background rects + text labels + close button).
+    fn draw_tab_bar(
+        &mut self,
+        config: &UiConfig,
+        size_info: &SizeInfo,
+        metrics: &crossfont::Metrics,
+        tab_titles: &[String],
+        active_index: usize,
+        close_button_hovered: bool,
+    ) {
+        let tab_config = &config.window.tab_bar;
+        let tab_bar_height = effective_tab_bar_height(config, size_info.cell_height());
+        let width = size_info.width();
+
+        let mut tab_rects: Vec<RenderRect> = Vec::new();
+
+        // Background for the entire tab bar.
+        let tab_bar_bg = config.colors.primary.background;
+        tab_rects.push(RenderRect::new(0., 0., width, tab_bar_height, tab_bar_bg, 1.));
+
+        let tab_count = tab_titles.len();
+        let tab_padding = 8.0;
+        let close_btn_slot = if matches!(config.window.decorations, Decorations::None) {
+            let (close_btn_x, _, _, _) = tab_bar_close_button_bounds(size_info, config);
+            width - size_info.padding_x() - close_btn_x + tab_padding
+        } else {
+            0.0
+        };
+        let tab_start_x = size_info.padding_x();
+        let tab_end_x = width - size_info.padding_x() - close_btn_slot;
+        let available_width =
+            (tab_end_x - tab_start_x - (tab_count.saturating_sub(1) as f32 * tab_padding))
+                .max(size_info.cell_width() * tab_count as f32);
+        let tab_width = available_width / tab_count as f32;
+
+        for (i, _title) in tab_titles.iter().enumerate() {
+            let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
+            let (_fg, bg) = if i == active_index {
+                (tab_config.text_color, tab_config.active_color)
+            } else {
+                (tab_config.text_color, tab_config.inactive_color)
+            };
+
+            let tab_rect_height = (tab_bar_height - 6.0).max(18.0);
+            let tab_rect_y = (tab_bar_height - tab_rect_height) / 2.0;
+            tab_rects.push(RenderRect::new(
+                tab_x,
+                tab_rect_y,
+                tab_width,
+                tab_rect_height,
+                bg,
+                1.,
+            ));
+        }
+
+        // Close button background (decorations=none).
+        if matches!(config.window.decorations, Decorations::None) {
+            let close_bg = if close_button_hovered {
+                Rgb::new(60, 25, 25)
+            } else {
+                Rgb::new(30, 30, 45)
+            };
+            let (btn_x, btn_y, btn_w, btn_h) = tab_bar_close_button_bounds(size_info, config);
+            tab_rects.push(RenderRect::new(btn_x, btn_y, btn_w, btn_h, close_bg, 1.));
+        }
+
+        // Always damage the tab bar area.
+        self.damage_tracker.frame().add_viewport_rect(
+            size_info,
+            0,
+            0,
+            size_info.width() as i32,
+            tab_bar_height as i32,
+        );
+
+        self.renderer.draw_rects(size_info, metrics, tab_rects);
+
+        // Draw tab title text.
+        let glyph_cache = &mut self.glyph_cache;
+        let tab_text_size_info = size_info.with_tab_bar_offset(0.0);
+
+        for (i, title) in tab_titles.iter().enumerate() {
+            let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
+            let (fg, _) = if i == active_index {
+                (tab_config.text_color, tab_config.active_color)
+            } else {
+                (tab_config.text_color, tab_config.inactive_color)
+            };
+
+            let max_chars = (tab_width / size_info.cell_width()) as usize;
+            let display_string: String = StrShortener::new(
+                title,
+                std::cmp::max(max_chars, 1),
+                ShortenDirection::Right,
+                Some('.'),
+            )
+            .collect();
+
+            let text_pixel_width = display_string.len() as f32 * size_info.cell_width();
+            let text_x = tab_x + (tab_width - text_pixel_width) / 2.0;
+            let text_col = ((text_x - tab_text_size_info.padding_x()) / size_info.cell_width())
+                .ceil() as usize;
+            let point = Point::new(0, Column(text_col));
+            self.renderer.draw_string(
+                point,
+                fg,
+                config.colors.primary.background,
+                display_string.chars(),
+                &tab_text_size_info,
+                glyph_cache,
+            );
+        }
+
+        // Close button text (decorations=none).
+        if matches!(config.window.decorations, Decorations::None) {
+            let (fg, close_bg) = if close_button_hovered {
+                (Rgb::new(220, 80, 75), Rgb::new(60, 25, 25))
+            } else {
+                (Rgb::new(120, 120, 140), Rgb::new(30, 30, 45))
+            };
+            let mut close_btn_size_info = tab_text_size_info.with_tab_bar_offset(-4.0);
+            let (close_btn_x, _, close_btn_w, _) = tab_bar_close_button_bounds(size_info, config);
+            let text_x = close_btn_x + (close_btn_w - size_info.cell_width()) / 2.0;
+            let cell_width = size_info.cell_width();
+            let text_col =
+                ((text_x - close_btn_size_info.padding_x()) / cell_width).floor().max(0.0) as usize;
+            let snapped_x =
+                close_btn_size_info.padding_x() + text_col as f32 * cell_width;
+            close_btn_size_info.padding_x += text_x - snapped_x;
+            let point = Point::new(0, Column(text_col));
+            self.renderer.draw_string(
+                point,
+                fg,
+                close_bg,
+                "✕".chars(),
+                &close_btn_size_info,
+                glyph_cache,
+            );
+        }
+    }
+
     /// Update to a new configuration.
     pub fn update_config(&mut self, config: &UiConfig) {
         self.damage_tracker.debug = config.debug.highlight_damage;
@@ -1393,7 +1805,9 @@ impl Display {
         }
 
         // Find highlighted hint at mouse position.
-        let point = mouse.point(&self.size_info, term.grid().display_offset());
+        let mut point = mouse.point(&self.size_info, term.grid().display_offset());
+        point.line = point.line.clamp(Line(0), Line(term.screen_lines().saturating_sub(1) as i32));
+        point.column = point.column.min(Column(term.columns().saturating_sub(1)));
         let highlighted_hint = hint::highlighted_at(term, config, point, modifiers);
 
         // Update cursor shape.

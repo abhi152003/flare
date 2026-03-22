@@ -242,6 +242,7 @@ impl WindowContext {
             terminal: Arc::clone(&terminal),
             notifier: Notifier(loop_tx.clone()),
             search_state: SearchState::default(),
+            active: true,
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -448,9 +449,6 @@ impl WindowContext {
             }
         }
 
-        // Redraw the window.
-        let terminal = self.terminal.lock();
-
         // Collect tab bar info for rendering.
         let tab_bar_info = if self.tab_manager.tab_count() > 1 {
             let titles: Vec<String> = self
@@ -465,15 +463,32 @@ impl WindowContext {
             None
         };
 
-        self.display.draw(
-            terminal,
-            scheduler,
-            &self.message_buffer,
-            &self.config,
-            &mut self.search_state,
-            tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
-            self.close_button_hovered,
-        );
+        let active_tab = self.tab_manager.active_tab();
+
+        if active_tab.is_split() {
+            // Split pane rendering: draw each pane in its viewport region.
+            self.display.draw_panes(
+                active_tab,
+                scheduler,
+                &self.message_buffer,
+                &self.config,
+                &mut self.search_state,
+                tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
+                self.close_button_hovered,
+            );
+        } else {
+            // Single pane: use the standard draw path.
+            let terminal = self.terminal.lock();
+            self.display.draw(
+                terminal,
+                scheduler,
+                &self.message_buffer,
+                &self.config,
+                &mut self.search_state,
+                tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
+                self.close_button_hovered,
+            );
+        }
     }
 
     /// Process events for this terminal window.
@@ -706,6 +721,7 @@ impl WindowContext {
             terminal: Arc::clone(&terminal),
             notifier: Notifier(loop_tx),
             search_state: SearchState::default(),
+            active: true,
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -776,6 +792,109 @@ impl WindowContext {
         self.activate_tab(self.tab_manager.active_tab_index(), proxy);
     }
 
+    /// Split the active pane in the current tab, spawning a new PTY.
+    pub fn split_active_pane(&mut self, direction: tab::SplitDirection, proxy: &EventLoopProxy<Event>) {
+        let new_pane = match self.create_pane(proxy) {
+            Some(pane) => pane,
+            None => return,
+        };
+
+        self.tab_manager
+            .active_tab_mut()
+            .root
+            .split_active(direction, new_pane);
+
+        self.activate_current_pane(proxy);
+    }
+
+    /// Close the active pane in the current tab.
+    ///
+    /// If only one pane remains, does nothing (the last pane persists).
+    /// If multiple panes exist, removes the active one and activates its sibling.
+    pub fn close_active_pane(&mut self, proxy: &EventLoopProxy<Event>) {
+        let tab = self.tab_manager.active_tab_mut();
+        if tab.pane_count() <= 1 {
+            return;
+        }
+
+        // Shut down the active pane's PTY.
+        let _ = tab.active_pane().notifier.0.send(Msg::Shutdown);
+
+        // Remove the active pane from the tree.
+        tab.root.close_active();
+        // Borrow of `tab` ends here, allowing `activate_current_pane` to borrow `tab_manager`.
+
+        // Activate the new active pane.
+        self.activate_current_pane(proxy);
+    }
+
+    /// Activate (focus) the active pane of the active tab, syncing the
+    /// WindowContext's terminal/notifier fields.
+    fn activate_current_pane(&mut self, proxy: &EventLoopProxy<Event>) {
+        let active_pane = self.tab_manager.active_tab().active_pane();
+
+        // Mark the old terminal as unfocused.
+        self.terminal.lock().is_focused = false;
+
+        self.terminal = Arc::clone(&active_pane.terminal);
+        self.notifier = active_pane.notifier.clone();
+
+        #[cfg(not(windows))]
+        {
+            self.master_fd = active_pane.master_fd;
+            self.shell_pid = active_pane.shell_pid;
+        }
+
+        self.terminal.lock().is_focused = true;
+
+        if self.config.cursor.style().blinking {
+            let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
+            event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
+        }
+
+        self.dirty = true;
+    }
+
+    /// Create a new pane (terminal + PTY) with the current display configuration.
+    fn create_pane(&self, proxy: &EventLoopProxy<Event>) -> Option<tab::Pane> {
+        let pty_config = self.config.pty_config();
+        let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
+
+        let terminal = Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
+        let terminal = Arc::new(FairMutex::new(terminal));
+
+        let pty = tty::new(&pty_config, self.display.size_info.into(), self.display.window.id().into())
+            .ok()?;
+
+        #[cfg(not(windows))]
+        let master_fd = pty.file().as_raw_fd();
+        #[cfg(not(windows))]
+        let shell_pid = pty.child().id();
+
+        let event_loop = PtyEventLoop::new(
+            Arc::clone(&terminal),
+            event_proxy,
+            pty,
+            pty_config.drain_on_exit,
+            self.config.debug.ref_test,
+        )
+        .ok()?;
+
+        let loop_tx = event_loop.channel();
+        let _io_thread = event_loop.spawn();
+
+        Some(tab::Pane {
+            terminal,
+            notifier: Notifier(loop_tx),
+            search_state: SearchState::default(),
+            active: true,
+            #[cfg(not(windows))]
+            master_fd,
+            #[cfg(not(windows))]
+            shell_pid,
+        })
+    }
+
     /// Handle a pending tab/pane action from the input processor.
     fn handle_tab_action(&mut self, action: TabAction, proxy: &EventLoopProxy<Event>) {
         match action {
@@ -800,6 +919,39 @@ impl WindowContext {
             TabAction::SelectTab(index) => {
                 if index < self.tab_manager.tab_count() {
                     self.activate_tab(index, proxy);
+                }
+            },
+            TabAction::SplitPaneHorizontal => {
+                self.split_active_pane(tab::SplitDirection::Vertical, proxy);
+            },
+            TabAction::SplitPaneVertical => {
+                self.split_active_pane(tab::SplitDirection::Horizontal, proxy);
+            },
+            TabAction::ClosePane => {
+                self.close_active_pane(proxy);
+            },
+            TabAction::SwitchPaneLeft => {
+                let tab = self.tab_manager.active_tab_mut();
+                if tab.root.navigate(tab::SplitDirection::Horizontal, true) {
+                    self.activate_current_pane(proxy);
+                }
+            },
+            TabAction::SwitchPaneRight => {
+                let tab = self.tab_manager.active_tab_mut();
+                if tab.root.navigate(tab::SplitDirection::Horizontal, false) {
+                    self.activate_current_pane(proxy);
+                }
+            },
+            TabAction::SwitchPaneUp => {
+                let tab = self.tab_manager.active_tab_mut();
+                if tab.root.navigate(tab::SplitDirection::Vertical, true) {
+                    self.activate_current_pane(proxy);
+                }
+            },
+            TabAction::SwitchPaneDown => {
+                let tab = self.tab_manager.active_tab_mut();
+                if tab.root.navigate(tab::SplitDirection::Vertical, false) {
+                    self.activate_current_pane(proxy);
                 }
             },
         }

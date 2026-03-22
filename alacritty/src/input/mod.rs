@@ -28,7 +28,7 @@ use winit::window::CursorIcon;
 
 use alacritty_terminal::event::EventListener;
 use alacritty_terminal::grid::{Dimensions, Scroll};
-use alacritty_terminal::index::{Boundary, Column, Direction, Point, Side};
+use alacritty_terminal::index::{Boundary, Column, Direction, Line, Point, Side};
 use alacritty_terminal::selection::SelectionType;
 use alacritty_terminal::term::search::Match;
 use alacritty_terminal::term::{ClipboardType, Term, TermMode};
@@ -152,6 +152,13 @@ pub trait ActionContext<T: EventListener> {
     fn close_active_tab(&mut self) {}
     fn select_next_tab(&mut self) {}
     fn select_previous_tab(&mut self) {}
+    fn split_pane_vertical(&mut self) {}
+    fn split_pane_horizontal(&mut self) {}
+    fn close_pane(&mut self) {}
+    fn switch_pane_left(&mut self) {}
+    fn switch_pane_right(&mut self) {}
+    fn switch_pane_up(&mut self) {}
+    fn switch_pane_down(&mut self) {}
 }
 
 impl Action {
@@ -456,13 +463,13 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SelectNextTab => ctx.select_next_tab(),
             #[cfg(not(target_os = "macos"))]
             Action::SelectPreviousTab => ctx.select_previous_tab(),
-            Action::SplitPaneVertical => ctx.mark_dirty(),
-            Action::SplitPaneHorizontal => ctx.mark_dirty(),
-            Action::ClosePane => ctx.mark_dirty(),
-            Action::SwitchPaneLeft
-            | Action::SwitchPaneRight
-            | Action::SwitchPaneUp
-            | Action::SwitchPaneDown => ctx.mark_dirty(),
+            Action::SplitPaneVertical => ctx.split_pane_vertical(),
+            Action::SplitPaneHorizontal => ctx.split_pane_horizontal(),
+            Action::ClosePane => ctx.close_pane(),
+            Action::SwitchPaneLeft => ctx.switch_pane_left(),
+            Action::SwitchPaneRight => ctx.switch_pane_right(),
+            Action::SwitchPaneUp => ctx.switch_pane_up(),
+            Action::SwitchPaneDown => ctx.switch_pane_down(),
             _ => (),
         }
     }
@@ -1156,11 +1163,22 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         }
 
         let display_offset = self.ctx.terminal().grid().display_offset();
-        let point = self.ctx.mouse().point(&self.ctx.size_info(), display_offset);
-        let hyperlink = self.ctx.terminal().grid()[point].hyperlink();
+        let size_info = self.ctx.size_info();
+        let point = self.ctx.mouse().point(&size_info, display_offset);
+
+        // Clamp point to the terminal's actual grid dimensions to prevent
+        // out-of-bounds access when split panes make the grid smaller than
+        // the full window size.
+        let num_lines = self.ctx.terminal().screen_lines();
+        let num_cols = self.ctx.terminal().columns();
+        let clamped_point = Point::new(
+            Line(point.line.0.min(num_lines as i32 - 1).max(0)),
+            Column(point.column.0.min(num_cols - 1)),
+        );
+        let hyperlink = self.ctx.terminal().grid()[clamped_point].hyperlink();
 
         // Function to check if mouse is on top of a hint.
-        let hint_highlighted = |hint: &HintMatch| hint.should_highlight(point, hyperlink.as_ref());
+        let hint_highlighted = |hint: &HintMatch| hint.should_highlight(clamped_point, hyperlink.as_ref());
 
         if let Some(mouse_state) = self.message_bar_cursor_state() {
             mouse_state

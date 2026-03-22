@@ -662,13 +662,20 @@ impl Default for InlineSearchState {
 
 /// Pending tab/pane actions that need to be handled at the WindowContext level.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code)]
 pub enum TabAction {
     CreateNewTab,
     CloseTab,
     NextTab,
     PreviousTab,
     SelectTab(usize),
+    // Pane actions.
+    SplitPaneHorizontal,
+    SplitPaneVertical,
+    ClosePane,
+    SwitchPaneLeft,
+    SwitchPaneRight,
+    SwitchPaneUp,
+    SwitchPaneDown,
 }
 
 pub struct ActionContext<'a, N, T> {
@@ -1530,6 +1537,34 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn select_previous_tab(&mut self) {
         *self.pending_tab_action = Some(TabAction::PreviousTab);
+    }
+
+    fn split_pane_vertical(&mut self) {
+        *self.pending_tab_action = Some(TabAction::SplitPaneVertical);
+    }
+
+    fn split_pane_horizontal(&mut self) {
+        *self.pending_tab_action = Some(TabAction::SplitPaneHorizontal);
+    }
+
+    fn close_pane(&mut self) {
+        *self.pending_tab_action = Some(TabAction::ClosePane);
+    }
+
+    fn switch_pane_left(&mut self) {
+        *self.pending_tab_action = Some(TabAction::SwitchPaneLeft);
+    }
+
+    fn switch_pane_right(&mut self) {
+        *self.pending_tab_action = Some(TabAction::SwitchPaneRight);
+    }
+
+    fn switch_pane_up(&mut self) {
+        *self.pending_tab_action = Some(TabAction::SwitchPaneUp);
+    }
+
+    fn switch_pane_down(&mut self) {
+        *self.pending_tab_action = Some(TabAction::SwitchPaneDown);
     }
 }
 
