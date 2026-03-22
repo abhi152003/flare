@@ -24,12 +24,12 @@ pub fn derive_deserialize(ident: Ident, generics: Generics, data_enum: DataEnum)
         let variant_ident = &variant.ident;
         let variant_str = variant_ident.to_string();
         available_values = format!("{available_values}`{variant_str}`, ");
-
-        let literal = variant_str.to_lowercase();
-
-        match_arms_stream.extend(quote! {
-            #literal => Ok(#ident :: #variant_ident),
-        });
+        let normalized_literals = normalized_literals(&variant_str);
+        for literal in normalized_literals {
+            match_arms_stream.extend(quote! {
+                #literal => Ok(#ident :: #variant_ident),
+            });
+        }
     }
 
     // Remove trailing `, ` from the last enum variant.
@@ -72,4 +72,36 @@ pub fn derive_deserialize(ident: Ident, generics: Generics, data_enum: DataEnum)
     tokens.extend(serde_replace::derive_direct(ident, generics));
 
     tokens.into()
+}
+
+fn normalized_literals(variant: &str) -> Vec<String> {
+    let mut literals = vec![variant.to_lowercase()];
+
+    let mut words = Vec::new();
+    let mut current = String::new();
+    for (index, ch) in variant.chars().enumerate() {
+        let should_split = index > 0
+            && ch.is_uppercase()
+            && current.chars().last().is_some_and(|last| last.is_lowercase());
+
+        if should_split {
+            words.push(current.to_lowercase());
+            current = String::new();
+        }
+
+        current.push(ch);
+    }
+
+    if !current.is_empty() {
+        words.push(current.to_lowercase());
+    }
+
+    if words.len() > 1 {
+        literals.push(words.join("-"));
+        literals.push(words.join("_"));
+    }
+
+    literals.sort();
+    literals.dedup();
+    literals
 }

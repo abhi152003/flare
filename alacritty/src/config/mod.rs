@@ -9,6 +9,7 @@ use serde_yaml::Error as YamlError;
 use toml::de::Error as TomlError;
 use toml::ser::Error as TomlSeError;
 use toml::{Table, Value};
+use alacritty_config::SerdeReplace;
 
 pub mod bell;
 pub mod color;
@@ -160,6 +161,8 @@ pub fn reload(config_path: &Path, options: &mut Options) -> Result<UiConfig> {
 
 /// Modifications after the `UiConfig` object is created.
 fn after_loading(config: &mut UiConfig, options: &mut Options) {
+    load_runtime_overrides(config);
+
     // Override config with CLI options.
     options.override_config(config);
     config.apply_theme_preset();
@@ -396,6 +399,89 @@ pub fn installed_config(suffix: &str) -> Option<PathBuf> {
             let fallback = PathBuf::from("/etc/alacritty").join(&file_name);
             fallback.exists().then_some(fallback)
         })
+}
+
+#[cfg(not(windows))]
+pub fn runtime_override_path(config_paths: &[PathBuf]) -> Option<PathBuf> {
+    config_paths
+        .first()
+        .and_then(|path| path.parent().map(|parent| parent.join("flare-runtime.toml")))
+        .or_else(|| {
+            xdg::BaseDirectories::with_prefix("alacritty")
+                .place_config_file("flare-runtime.toml")
+                .ok()
+        })
+}
+
+#[cfg(windows)]
+pub fn runtime_override_path(config_paths: &[PathBuf]) -> Option<PathBuf> {
+    config_paths
+        .first()
+        .and_then(|path| path.parent().map(|parent| parent.join("flare-runtime.toml")))
+        .or_else(|| dirs::config_dir().map(|dir| dir.join("alacritty").join("flare-runtime.toml")))
+}
+
+pub fn load_runtime_overrides(config: &mut UiConfig) {
+    let Some(runtime_path) = runtime_override_path(&config.config_paths) else {
+        return;
+    };
+
+    if !runtime_path.exists() {
+        return;
+    }
+
+    match deserialize_config(&runtime_path, false) {
+        Ok(value) => {
+            if let Err(err) = config.replace(value) {
+                error!(target: LOG_TARGET_CONFIG, "Unable to load runtime overrides {runtime_path:?}: {err}");
+                return;
+            }
+
+            if !config.config_paths.contains(&runtime_path) {
+                config.config_paths.push(runtime_path);
+            }
+        },
+        Err(err) => {
+            error!(target: LOG_TARGET_CONFIG, "Unable to read runtime overrides {runtime_path:?}: {err}");
+        },
+    }
+}
+
+pub fn persist_runtime_overrides(config_paths: &[PathBuf], options: &[String]) -> Result<()> {
+    let Some(runtime_path) = runtime_override_path(config_paths) else {
+        return Ok(());
+    };
+
+    let parent = runtime_path.parent().map(PathBuf::from).unwrap_or_default();
+    if !parent.as_os_str().is_empty() {
+        fs::create_dir_all(&parent)?;
+    }
+
+    let mut merged = if runtime_path.exists() {
+        deserialize_config(&runtime_path, false)?
+    } else {
+        Value::Table(Table::new())
+    };
+
+    for option in options {
+        let value = toml::from_str(option)?;
+        merged = serde_utils::merge(merged, value);
+    }
+
+    fs::write(&runtime_path, toml::to_string_pretty(&merged)?)?;
+    Ok(())
+}
+
+pub fn clear_runtime_overrides(config_paths: &[PathBuf]) -> Result<()> {
+    let Some(runtime_path) = runtime_override_path(config_paths) else {
+        return Ok(());
+    };
+
+    match fs::remove_file(&runtime_path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
 }
 
 #[cfg(windows)]

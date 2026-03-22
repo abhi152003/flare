@@ -96,7 +96,7 @@ fn config_deserialize() {
 
         flatty = 123
         enom_small = "one"
-        enom_big = "THREE"
+        enom_big = "three"
         enom_error = "HugaBuga"
         gone = false
 
@@ -142,6 +142,29 @@ fn config_deserialize() {
          automatically resolve it",
         "Unused config key: field3",
     ]);
+}
+
+#[test]
+fn enum_deserialize_supports_kebab_and_snake_case() {
+    #[derive(ConfigDeserialize, Debug, PartialEq, Eq)]
+    enum ThemePresetLike {
+        TokyoNight,
+        CatppuccinMocha,
+    }
+
+    #[derive(Deserialize)]
+    struct Wrapper {
+        theme: ThemePresetLike,
+    }
+
+    assert_eq!(
+        toml::from_str::<Wrapper>(r#"theme = "tokyo-night""#).unwrap().theme,
+        ThemePresetLike::TokyoNight,
+    );
+    assert_eq!(
+        toml::from_str::<Wrapper>(r#"theme = "catppuccin_mocha""#).unwrap().theme,
+        ThemePresetLike::CatppuccinMocha,
+    );
 }
 
 /// Logger storing all messages for later validation.
