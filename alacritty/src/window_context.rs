@@ -19,8 +19,7 @@ use serde_json as json;
 use winit::event::{ElementState, Event as WinitEvent, Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::raw_window_handle::HasDisplayHandle;
-use winit::window::CursorIcon;
-use winit::window::WindowId;
+use winit::window::{CursorIcon, ResizeDirection, WindowId};
 
 use alacritty_terminal::event::Event as TerminalEvent;
 use alacritty_terminal::event_loop::{EventLoop as PtyEventLoop, Msg, Notifier};
@@ -35,8 +34,8 @@ use crate::cli::{ParsedOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
 use crate::config::window::Decorations;
-use crate::display::{Display, tab_bar_close_button_bounds};
 use crate::display::window::Window;
+use crate::display::{Display, tab_bar_close_button_bounds};
 use crate::event::{
     ActionContext, Event, EventProxy, InlineSearchState, Mouse, SearchState, TabAction,
     TouchPurpose,
@@ -76,6 +75,8 @@ pub struct WindowContext {
 }
 
 impl WindowContext {
+    const BORDERLESS_RESIZE_HANDLE_SIZE: f32 = 8.0;
+
     /// Create initial window context that does bootstrapping the graphics API we're going to use.
     pub fn initial(
         event_loop: &ActiveEventLoop,
@@ -248,10 +249,8 @@ impl WindowContext {
             #[cfg(not(windows))]
             shell_pid,
         };
-        let initial_tab = tab::Tab {
-            root: tab::PaneNode::Leaf(initial_pane),
-            title: tab::Tab::auto_title(0),
-        };
+        let initial_tab =
+            tab::Tab { root: tab::PaneNode::Leaf(initial_pane), title: tab::Tab::auto_title(0) };
         let mut tab_manager = TabManager::new();
         tab_manager.add_tab(initial_tab);
 
@@ -289,6 +288,11 @@ impl WindowContext {
 
         // Apply ipc config if there are overrides.
         self.config = self.window_config.override_config_rc(self.config.clone());
+        if self.config.window.theme_preset.is_some() {
+            let mut themed = (*self.config).clone();
+            themed.apply_theme_preset();
+            self.config = Rc::new(themed);
+        }
 
         self.display.update_config(&self.config);
         self.terminal.lock().set_options(self.config.term_options());
@@ -401,8 +405,7 @@ impl WindowContext {
 
         if tabs_visible {
             // When tabs are visible, the close button is at the right edge of the tab bar.
-            let (btn_x, btn_y, btn_w, btn_h) =
-                tab_bar_close_button_bounds(size_info, &self.config);
+            let (btn_x, btn_y, btn_w, btn_h) = tab_bar_close_button_bounds(size_info, &self.config);
 
             let mouse_x = self.mouse.x as f32;
             let mouse_y = self.mouse.y as f32;
@@ -422,6 +425,88 @@ impl WindowContext {
                 point.line == 0
                     && point.column.0 >= size_info.columns().saturating_sub(btn_columns),
             )
+        }
+    }
+
+    fn full_pane_viewport(&self) -> tab::PaneViewport {
+        let size_info = self.display.size_info;
+        let content_y = size_info.padding_y() + size_info.tab_bar_offset_y();
+        let content_height =
+            size_info.height() - 2.0 * size_info.padding_y() - size_info.tab_bar_offset_y();
+
+        tab::PaneViewport::new(
+            size_info.padding_x(),
+            content_y,
+            size_info.width() - 2.0 * size_info.padding_x(),
+            content_height,
+        )
+    }
+
+    fn active_pane_size_info(&self) -> Option<crate::display::SizeInfo<f32>> {
+        let active_tab = self.tab_manager.active_tab();
+        if !active_tab.is_split() {
+            return None;
+        }
+
+        let active_pane = active_tab.active_pane();
+        let base = self.display.size_info;
+        let viewport = active_tab
+            .pane_viewports(self.full_pane_viewport())
+            .into_iter()
+            .find_map(|(viewport, pane)| std::ptr::eq(pane, active_pane).then_some(viewport))?;
+
+        Some(crate::display::SizeInfo::new(
+            viewport.width,
+            viewport.height,
+            base.cell_width(),
+            base.cell_height(),
+            viewport.x,
+            viewport.y,
+            false,
+            0.0,
+        ))
+    }
+
+    fn focus_pane_at_mouse(&mut self, proxy: &EventLoopProxy<Event>) -> bool {
+        let full_viewport = self.full_pane_viewport();
+        let mouse_x = self.mouse.x as f32;
+        let mouse_y = self.mouse.y as f32;
+
+        let focused =
+            self.tab_manager.active_tab_mut().focus_pane_at_point(full_viewport, mouse_x, mouse_y);
+
+        if focused {
+            self.activate_current_pane(proxy);
+        }
+
+        focused
+    }
+
+    fn borderless_resize_direction(&self) -> Option<ResizeDirection> {
+        if self.config.window.decorations != Decorations::None {
+            return None;
+        }
+
+        let size = self.display.size_info;
+        let x = self.mouse.x as f32;
+        let y = self.mouse.y as f32;
+        let margin = Self::BORDERLESS_RESIZE_HANDLE_SIZE;
+
+        let near_left = x <= margin;
+        let near_right = x >= size.width() - margin;
+        let near_top = y <= margin;
+        let near_bottom = y >= size.height() - margin;
+
+        match (near_left, near_right, near_top, near_bottom) {
+            (true, false, true, false) => Some(ResizeDirection::NorthWest),
+            (true, false, false, true) => Some(ResizeDirection::SouthWest),
+            (false, true, true, false) => Some(ResizeDirection::NorthEast),
+            (false, true, false, true) => Some(ResizeDirection::SouthEast),
+            (true, false, false, false) => Some(ResizeDirection::West),
+            (false, true, false, false) => Some(ResizeDirection::East),
+            (false, false, true, false) => Some(ResizeDirection::North),
+            (false, false, false, true) => Some(ResizeDirection::South),
+            _ => None,
         }
     }
 
@@ -518,6 +603,27 @@ impl WindowContext {
                     terminal.exit();
                     return;
                 }
+
+                drop(terminal);
+                if let Some(direction) = self.borderless_resize_direction() {
+                    let _ = self.display.window.drag_resize_window(direction);
+                    return;
+                }
+            }
+        }
+
+        if let WinitEvent::WindowEvent {
+            event:
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: winit::event::MouseButton::Left,
+                    ..
+                },
+            ..
+        } = &event
+        {
+            if self.tab_manager.active_tab().is_split() {
+                self.focus_pane_at_mouse(event_proxy);
             }
         }
 
@@ -552,6 +658,7 @@ impl WindowContext {
         let pending_events = mem::take(&mut self.event_queue);
         let mut pending_events = pending_events.into_iter();
         while let Some(event) = pending_events.next() {
+            let pane_size_info = self.active_pane_size_info();
             let context = ActionContext {
                 cursor_blink_timed_out: &mut self.cursor_blink_timed_out,
                 prev_bell_cmd: &mut self.prev_bell_cmd,
@@ -566,6 +673,7 @@ impl WindowContext {
                 dirty: &mut self.dirty,
                 occluded: &mut self.occluded,
                 terminal: &mut terminal,
+                pane_size_info,
                 #[cfg(not(windows))]
                 master_fd: self.master_fd,
                 #[cfg(not(windows))]
@@ -646,7 +754,9 @@ impl WindowContext {
 
         // Set cursor to pointer when hovering over the close button (after hint processing
         // which may reset the cursor).
-        if self.config.window.decorations == Decorations::None && self.close_button_hovered {
+        if let Some(direction) = self.borderless_resize_direction() {
+            self.display.window.set_mouse_cursor(direction.into());
+        } else if self.config.window.decorations == Decorations::None && self.close_button_hovered {
             self.display.window.set_mouse_cursor(CursorIcon::Pointer);
         }
 
@@ -684,10 +794,15 @@ impl WindowContext {
 
         let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
 
-        let terminal = Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
+        let terminal =
+            Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
         let terminal = Arc::new(FairMutex::new(terminal));
 
-        let pty = match tty::new(&pty_config, self.display.size_info.into(), self.display.window.id().into()) {
+        let pty = match tty::new(
+            &pty_config,
+            self.display.size_info.into(),
+            self.display.window.id().into(),
+        ) {
             Ok(pty) => pty,
             Err(err) => {
                 log::error!("Failed to create PTY for new tab: {err}");
@@ -781,9 +896,11 @@ impl WindowContext {
             return;
         }
 
-        // Shut down the active tab's PTY.
+        // Shut down all PTYs owned by the tab.
         let active_tab = self.tab_manager.active_tab();
-        let _ = active_tab.active_pane().notifier.0.send(Msg::Shutdown);
+        for pane in active_tab.root.iter_leaves() {
+            let _ = pane.notifier.0.send(Msg::Shutdown);
+        }
 
         let current_index = self.tab_manager.active_tab_index();
         self.tab_manager.close_tab(current_index);
@@ -793,16 +910,17 @@ impl WindowContext {
     }
 
     /// Split the active pane in the current tab, spawning a new PTY.
-    pub fn split_active_pane(&mut self, direction: tab::SplitDirection, proxy: &EventLoopProxy<Event>) {
+    pub fn split_active_pane(
+        &mut self,
+        direction: tab::SplitDirection,
+        proxy: &EventLoopProxy<Event>,
+    ) {
         let new_pane = match self.create_pane(proxy) {
             Some(pane) => pane,
             None => return,
         };
 
-        self.tab_manager
-            .active_tab_mut()
-            .root
-            .split_active(direction, new_pane);
+        self.tab_manager.active_tab_mut().root.split_active(direction, new_pane);
 
         self.activate_current_pane(proxy);
     }
@@ -860,11 +978,13 @@ impl WindowContext {
         let pty_config = self.config.pty_config();
         let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
 
-        let terminal = Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
+        let terminal =
+            Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
         let terminal = Arc::new(FairMutex::new(terminal));
 
-        let pty = tty::new(&pty_config, self.display.size_info.into(), self.display.window.id().into())
-            .ok()?;
+        let pty =
+            tty::new(&pty_config, self.display.size_info.into(), self.display.window.id().into())
+                .ok()?;
 
         #[cfg(not(windows))]
         let master_fd = pty.file().as_raw_fd();
@@ -911,8 +1031,7 @@ impl WindowContext {
             TabAction::PreviousTab => {
                 if self.tab_manager.tab_count() > 1 {
                     let len = self.tab_manager.tab_count();
-                    let new_index =
-                        (self.tab_manager.active_tab_index() + len - 1) % len;
+                    let new_index = (self.tab_manager.active_tab_index() + len - 1) % len;
                     self.activate_tab(new_index, proxy);
                 }
             },
@@ -931,26 +1050,30 @@ impl WindowContext {
                 self.close_active_pane(proxy);
             },
             TabAction::SwitchPaneLeft => {
+                let full_viewport = self.full_pane_viewport();
                 let tab = self.tab_manager.active_tab_mut();
-                if tab.root.navigate(tab::SplitDirection::Horizontal, true) {
+                if tab.focus_adjacent_pane(tab::SplitDirection::Horizontal, true, full_viewport) {
                     self.activate_current_pane(proxy);
                 }
             },
             TabAction::SwitchPaneRight => {
+                let full_viewport = self.full_pane_viewport();
                 let tab = self.tab_manager.active_tab_mut();
-                if tab.root.navigate(tab::SplitDirection::Horizontal, false) {
+                if tab.focus_adjacent_pane(tab::SplitDirection::Horizontal, false, full_viewport) {
                     self.activate_current_pane(proxy);
                 }
             },
             TabAction::SwitchPaneUp => {
+                let full_viewport = self.full_pane_viewport();
                 let tab = self.tab_manager.active_tab_mut();
-                if tab.root.navigate(tab::SplitDirection::Vertical, true) {
+                if tab.focus_adjacent_pane(tab::SplitDirection::Vertical, true, full_viewport) {
                     self.activate_current_pane(proxy);
                 }
             },
             TabAction::SwitchPaneDown => {
+                let full_viewport = self.full_pane_viewport();
                 let tab = self.tab_manager.active_tab_mut();
-                if tab.root.navigate(tab::SplitDirection::Vertical, false) {
+                if tab.focus_adjacent_pane(tab::SplitDirection::Vertical, false, full_viewport) {
                     self.activate_current_pane(proxy);
                 }
             },
@@ -1005,14 +1128,7 @@ impl WindowContext {
             search_state.direction == Direction::Left
         };
 
-        display.handle_update(
-            terminal,
-            notifier,
-            message_buffer,
-            search_state,
-            config,
-            tab_count,
-        );
+        display.handle_update(terminal, notifier, message_buffer, search_state, config, tab_count);
 
         let new_is_searching = search_state.history_index.is_some();
         if !old_is_searching && new_is_searching {

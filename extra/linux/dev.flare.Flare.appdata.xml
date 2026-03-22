@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: MIT -->
+<component type="desktop-application">
+  <id>dev.flare.Flare</id>
+
+  <developer_name>Abhi Prajapati</developer_name>
+  <developer id="dev.flare">
+    <name>Abhi Prajapati</name>
+  </developer>
+
+  <name>Flare</name>
+
+  <project_license>Apache-2.0</project_license>
+  <metadata_license>MIT</metadata_license>
+
+  <summary>An aesthetic, GPU-accelerated terminal emulator</summary>
+  <description>
+    <p>
+      Flare is a modern terminal emulator forked from Alacritty and tailored for
+      a more expressive desktop experience, while keeping Alacritty's fast and
+      reliable terminal core.
+    </p>
+    <ul>
+      <li>Wayland native</li>
+      <li>X11 native</li>
+      <li>DE agnostic</li>
+      <li>Runtime theme and opacity controls</li>
+      <li>Custom tab and split-pane workflow</li>
+    </ul>
+  </description>
+
+  <categories>
+    <category>TerminalEmulator</category>
+  </categories>
+
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/abhi152003/flare/main/docs/image.png</image>
+      <caption>Flare showing its custom aesthetic terminal interface</caption>
+    </screenshot>
+  </screenshots>
+
+  <url type="homepage">https://github.com/abhi152003/flare</url>
+  <url type="bugtracker">https://github.com/abhi152003/flare/issues</url>
+
+  <launchable type="desktop-id">Flare.desktop</launchable>
+
+  <content_rating type="oars-1.0" />
+</component>

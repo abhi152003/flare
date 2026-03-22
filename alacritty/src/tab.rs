@@ -22,12 +22,7 @@ pub enum PaneNode {
     /// A single terminal pane.
     Leaf(Pane),
     /// A split containing two child nodes.
-    Split {
-        direction: SplitDirection,
-        ratio: f32,
-        first: Box<PaneNode>,
-        second: Box<PaneNode>,
-    },
+    Split { direction: SplitDirection, ratio: f32, first: Box<PaneNode>, second: Box<PaneNode> },
 }
 
 /// Pixel region occupied by a pane in the viewport.
@@ -46,6 +41,10 @@ pub struct PaneViewport {
 impl PaneViewport {
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self { x, y, width, height }
+    }
+
+    pub fn contains(self, x: f32, y: f32) -> bool {
+        x >= self.x && x < self.x + self.width && y >= self.y && y < self.y + self.height
     }
 }
 
@@ -157,7 +156,9 @@ impl PaneNode {
                         let PaneNode::Leaf(removed) = *old_first else { unreachable!() };
                         let mut replacement = *old_second;
                         replacement.ensure_active_first();
-                        unsafe { std::ptr::write(self as *mut PaneNode, replacement); }
+                        unsafe {
+                            std::ptr::write(self as *mut PaneNode, replacement);
+                        }
                         return Some(removed);
                     }
                     unreachable!()
@@ -169,7 +170,9 @@ impl PaneNode {
                         let PaneNode::Leaf(removed) = *old_second else { unreachable!() };
                         let mut replacement = *old_first;
                         replacement.ensure_active_last();
-                        unsafe { std::ptr::write(self as *mut PaneNode, replacement); }
+                        unsafe {
+                            std::ptr::write(self as *mut PaneNode, replacement);
+                        }
                         return Some(removed);
                     }
                     unreachable!()
@@ -265,6 +268,49 @@ impl PaneNode {
             PaneNode::Split { first, second, .. } => {
                 first.clear_active();
                 second.ensure_active_last();
+            },
+        }
+    }
+
+    fn active_leaf_index(&self) -> Option<usize> {
+        self.active_leaf_index_inner(0).map(|(index, _)| index)
+    }
+
+    fn active_leaf_index_inner(&self, next_index: usize) -> Option<(usize, usize)> {
+        match self {
+            PaneNode::Leaf(pane) => pane.active.then_some((next_index, next_index + 1)),
+            PaneNode::Split { first, second, .. } => {
+                if let Some((index, next)) = first.active_leaf_index_inner(next_index) {
+                    return Some((index, next));
+                }
+
+                let next_index = next_index + first.pane_count();
+                second.active_leaf_index_inner(next_index)
+            },
+        }
+    }
+
+    fn set_active_by_index(&mut self, target_index: usize) -> bool {
+        let mut current_index = 0;
+        self.set_active_by_index_inner(target_index, &mut current_index)
+    }
+
+    fn set_active_by_index_inner(
+        &mut self,
+        target_index: usize,
+        current_index: &mut usize,
+    ) -> bool {
+        match self {
+            PaneNode::Leaf(pane) => {
+                let is_target = *current_index == target_index;
+                pane.active = is_target;
+                *current_index += 1;
+                is_target
+            },
+            PaneNode::Split { first, second, .. } => {
+                let first_matched = first.set_active_by_index_inner(target_index, current_index);
+                let second_matched = second.set_active_by_index_inner(target_index, current_index);
+                first_matched || second_matched
             },
         }
     }
@@ -372,11 +418,98 @@ impl Tab {
     }
 
     /// Get viewport rectangles for all panes in this tab.
-    pub fn pane_viewports(
-        &self,
-        viewport: PaneViewport,
-    ) -> Vec<(PaneViewport, &Pane)> {
+    pub fn pane_viewports(&self, viewport: PaneViewport) -> Vec<(PaneViewport, &Pane)> {
         self.root.pane_viewports(viewport)
+    }
+
+    pub fn focus_pane_at_point(&mut self, viewport: PaneViewport, x: f32, y: f32) -> bool {
+        let Some(index) = self
+            .pane_viewports(viewport)
+            .iter()
+            .position(|(pane_viewport, _)| pane_viewport.contains(x, y))
+        else {
+            return false;
+        };
+
+        self.root.set_active_by_index(index)
+    }
+
+    pub fn focus_adjacent_pane(
+        &mut self,
+        direction: SplitDirection,
+        reverse: bool,
+        viewport: PaneViewport,
+    ) -> bool {
+        let pane_viewports = self.pane_viewports(viewport);
+        let Some(active_index) = self.root.active_leaf_index() else {
+            return false;
+        };
+        let Some((active_viewport, _)) = pane_viewports.get(active_index) else {
+            return false;
+        };
+
+        let active_center_x = active_viewport.x + active_viewport.width / 2.0;
+        let active_center_y = active_viewport.y + active_viewport.height / 2.0;
+
+        let mut best_index = None;
+        let mut best_primary_distance = f32::MAX;
+        let mut best_secondary_distance = f32::MAX;
+
+        for (index, (candidate, _)) in pane_viewports.iter().enumerate() {
+            if index == active_index {
+                continue;
+            }
+
+            let candidate_center_x = candidate.x + candidate.width / 2.0;
+            let candidate_center_y = candidate.y + candidate.height / 2.0;
+
+            let overlaps_on_cross_axis = match direction {
+                SplitDirection::Horizontal => {
+                    candidate.y < active_viewport.y + active_viewport.height
+                        && active_viewport.y < candidate.y + candidate.height
+                },
+                SplitDirection::Vertical => {
+                    candidate.x < active_viewport.x + active_viewport.width
+                        && active_viewport.x < candidate.x + candidate.width
+                },
+            };
+
+            if !overlaps_on_cross_axis {
+                continue;
+            }
+
+            let (primary_distance, secondary_distance) = match direction {
+                SplitDirection::Horizontal => {
+                    let delta_x = candidate_center_x - active_center_x;
+                    if (!reverse && delta_x <= 0.0) || (reverse && delta_x >= 0.0) {
+                        continue;
+                    }
+                    (delta_x.abs(), (candidate_center_y - active_center_y).abs())
+                },
+                SplitDirection::Vertical => {
+                    let delta_y = candidate_center_y - active_center_y;
+                    if (!reverse && delta_y <= 0.0) || (reverse && delta_y >= 0.0) {
+                        continue;
+                    }
+                    (delta_y.abs(), (candidate_center_x - active_center_x).abs())
+                },
+            };
+
+            if primary_distance < best_primary_distance
+                || (primary_distance == best_primary_distance
+                    && secondary_distance < best_secondary_distance)
+            {
+                best_index = Some(index);
+                best_primary_distance = primary_distance;
+                best_secondary_distance = secondary_distance;
+            }
+        }
+
+        let Some(index) = best_index else {
+            return false;
+        };
+
+        self.root.set_active_by_index(index)
     }
 }
 

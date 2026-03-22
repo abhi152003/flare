@@ -312,18 +312,29 @@ sudo tic -xe alacritty,alacritty-direct extra/alacritty.info
 ### Desktop Entry
 
 Many Linux and BSD distributions support desktop entries for adding applications
-to system menus. This will install the desktop entry for Alacritty:
+to system menus. This will install the desktop entry for Flare:
 
 ```sh
-sudo cp target/release/alacritty /usr/local/bin # or anywhere else in $PATH
-sudo cp extra/logo/alacritty-term.svg /usr/share/pixmaps/Alacritty.svg
-sudo desktop-file-install extra/linux/Alacritty.desktop
+sudo cp target/release/flare /usr/local/bin # or anywhere else in $PATH
+sudo cp extra/logo/compat/flare.png /usr/share/pixmaps/flare.png
+sudo desktop-file-install extra/linux/Flare.desktop
 sudo update-desktop-database
 ```
 
-If you are having problems with Alacritty's logo, you can replace it with
+If you are having problems with Flare's logo, you can replace it with
 prerendered PNGs and simplified SVGs available in the `extra/logo/compat`
 directory.
+
+### Debian Package
+
+To build a Debian package for local installation/testing:
+
+```sh
+cargo install cargo-deb
+cargo deb -p flare
+```
+
+The generated package will be placed in `target/debian/`.
 
 ### Manual Page
 

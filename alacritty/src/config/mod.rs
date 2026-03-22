@@ -162,6 +162,7 @@ pub fn reload(config_path: &Path, options: &mut Options) -> Result<UiConfig> {
 fn after_loading(config: &mut UiConfig, options: &mut Options) {
     // Override config with CLI options.
     options.override_config(config);
+    config.apply_theme_preset();
 }
 
 /// Load configuration file and log errors.

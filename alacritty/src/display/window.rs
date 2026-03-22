@@ -35,20 +35,20 @@ use winit::monitor::MonitorHandle;
 use winit::platform::windows::{IconExtWindows, WindowAttributesExtWindows};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use winit::window::{
-    CursorIcon, Fullscreen, ImePurpose, Theme, UserAttentionType, Window as WinitWindow,
-    WindowAttributes, WindowId,
+    CursorIcon, Fullscreen, ImePurpose, ResizeDirection, Theme, UserAttentionType,
+    Window as WinitWindow, WindowAttributes, WindowId,
 };
 
 use alacritty_terminal::index::Point;
 
 use crate::cli::WindowOptions;
-use crate::config::window::{Decorations, Identity, WindowConfig};
 use crate::config::UiConfig;
+use crate::config::window::{Decorations, Identity, WindowConfig};
 use crate::display::SizeInfo;
 
 /// Window icon for `_NET_WM_ICON` property.
 #[cfg(all(feature = "x11", not(any(target_os = "macos", windows))))]
-const WINDOW_ICON: &[u8] = include_bytes!("../../extra/logo/compat/alacritty-term.png");
+const WINDOW_ICON: &[u8] = include_bytes!("../../extra/logo/compat/flare.png");
 
 /// This should match the definition of IDI_ICON from `alacritty.rc`.
 #[cfg(windows)]
@@ -407,6 +407,13 @@ impl Window {
 
     pub fn set_theme(&self, theme: Option<Theme>) {
         self.window.set_theme(theme);
+    }
+
+    pub fn drag_resize_window(
+        &self,
+        direction: ResizeDirection,
+    ) -> std::result::Result<(), winit::error::ExternalError> {
+        self.window.drag_resize_window(direction)
     }
 
     #[cfg(target_os = "macos")]

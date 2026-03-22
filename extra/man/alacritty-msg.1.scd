@@ -63,6 +63,8 @@ making it possible to control Alacritty without directly accessing it.
 			Configuration file options.
 
 			Example: _alacritty msg config 'cursor.style="Beam"'_
+			Example: _alacritty msg config 'window.opacity=0.82'_
+			Example: _alacritty msg config 'window.theme_preset="tokyo-night"'_
 
 	*FLAGS*
 		*-r, --reset*

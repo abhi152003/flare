@@ -686,6 +686,7 @@ pub struct ActionContext<'a, N, T> {
     pub touch: &'a mut TouchPurpose,
     pub modifiers: &'a mut Modifiers,
     pub display: &'a mut Display,
+    pub pane_size_info: Option<SizeInfo>,
     pub message_buffer: &'a mut MessageBuffer,
     pub config: &'a UiConfig,
     pub cursor_blink_timed_out: &'a mut bool,
@@ -720,7 +721,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     #[inline]
     fn size_info(&self) -> SizeInfo {
-        self.display.size_info
+        self.pane_size_info.unwrap_or(self.display.size_info)
     }
 
     fn scroll(&mut self, scroll: Scroll) {

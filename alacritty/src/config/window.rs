@@ -27,6 +27,17 @@ pub enum TabBarStyle {
     Rounded,
 }
 
+/// Built-in theme presets for the terminal UI.
+#[derive(ConfigDeserialize, Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemePreset {
+    TokyoNight,
+    CatppuccinMocha,
+    Nord,
+    Dracula,
+    OneDark,
+}
+
 /// Gradient configuration for the terminal background.
 #[derive(ConfigDeserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct GradientConfig {
@@ -137,6 +148,9 @@ pub struct WindowConfig {
     /// Tab bar configuration.
     pub tab_bar: TabBarConfig,
 
+    /// Built-in theme preset applied on top of defaults.
+    pub theme_preset: Option<ThemePreset>,
+
     /// Controls which `Option` key should be treated as `Alt`.
     option_as_alt: OptionAsAlt,
 
@@ -177,6 +191,7 @@ impl Default for WindowConfig {
             background_gradient: Default::default(),
             border_radius: 0.0,
             tab_bar: Default::default(),
+            theme_preset: Default::default(),
         }
     }
 }

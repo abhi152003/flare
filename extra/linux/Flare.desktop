@@ -1,18 +1,18 @@
 [Desktop Entry]
 Type=Application
-TryExec=alacritty
-Exec=alacritty
-Icon=Alacritty
+TryExec=flare
+Exec=flare
+Icon=flare
 Terminal=false
 Categories=System;TerminalEmulator;
 
-Name=Alacritty
+Name=Flare
 GenericName=Terminal
-Comment=A fast, cross-platform, OpenGL terminal emulator
+Comment=A fast, aesthetic, cross-platform OpenGL terminal emulator
 StartupNotify=true
-StartupWMClass=Alacritty
+StartupWMClass=Flare
 Actions=New;
 
 [Desktop Action New]
 Name=New Terminal
-Exec=alacritty
+Exec=flare

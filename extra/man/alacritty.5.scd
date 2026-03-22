@@ -136,6 +136,14 @@ This section documents the *[window]* table of the configuration file.
 
 	Default: _1.0_
 
+*theme_preset* = _"tokyo-night"_ | _"catppuccin-mocha"_ | _"nord"_ | _"dracula"_ | _"one-dark"_
+
+	Apply a built-in visual preset for terminal colors, gradient background, and
+	tab bar accents. This can also be changed at runtime with
+	_alacritty msg config_.
+
+	Default: _none_
+
 *blur* = _true_ | _false_ # _(works on macOS/KDE Wayland)_
 
 	Request compositor to blur content behind transparent windows.

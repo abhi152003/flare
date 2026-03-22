@@ -5,8 +5,8 @@ authors = ["Christian Duerr <contact@christianduerr.com>", "Joe Wilm <joe@jwilm.
 license = "Apache-2.0"
 description = "A fast, aesthetic, cross-platform, OpenGL terminal emulator"
 readme = "README.md"
-homepage = "https://alacritty.org"
-repository = "https://github.com/alacritty/alacritty"
+homepage = "https://github.com/abhi152003/flare"
+repository = "https://github.com/abhi152003/flare"
 edition.workspace = true
 rust-version.workspace = true
 
@@ -102,3 +102,23 @@ wayland = [
     "winit/wayland-csd-adwaita-crossfont",
 ]
 nightly = []
+
+[package.metadata.deb]
+name = "flare"
+maintainer = "Abhi Prajapati <abhiprajapati011@gmail.com>"
+copyright = "2026, Abhi Prajapati"
+license-file = ["../LICENSE-APACHE", "0"]
+depends = "$auto"
+section = "utils"
+priority = "optional"
+extended-description = """\
+Flare is an aesthetic GPU-accelerated terminal emulator built on top of
+Alacritty's rendering and terminal core, with custom theming, transparency,
+tabs, and split panes.
+"""
+assets = [
+    ["target/release/flare", "usr/bin/flare", "755"],
+    ["../extra/linux/Flare.desktop", "usr/share/applications/Flare.desktop", "644"],
+    ["../extra/linux/dev.flare.Flare.appdata.xml", "usr/share/metainfo/dev.flare.Flare.appdata.xml", "644"],
+    ["../extra/logo/compat/flare.png", "usr/share/icons/hicolor/256x256/apps/flare.png", "644"],
+]

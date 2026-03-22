@@ -33,7 +33,9 @@ use crate::config::mouse::Mouse;
 use crate::config::scrolling::Scrolling;
 use crate::config::selection::Selection;
 use crate::config::terminal::Terminal;
-use crate::config::window::WindowConfig;
+use crate::config::window::{
+    GradientConfig, GradientDirection, TabBarConfig, TabBarStyle, ThemePreset, WindowConfig,
+};
 
 /// Regex used for the default URL hint.
 #[rustfmt::skip]
@@ -115,6 +117,200 @@ pub struct UiConfig {
 }
 
 impl UiConfig {
+    pub fn apply_theme_preset(&mut self) {
+        let Some(theme) = self.window.theme_preset else {
+            return;
+        };
+
+        match theme {
+            ThemePreset::TokyoNight => {
+                self.colors.primary.background = rgb(0x1a, 0x1b, 0x26);
+                self.colors.primary.foreground = rgb(0xc0, 0xca, 0xf5);
+                self.colors.primary.bright_foreground = Some(rgb(0xc0, 0xca, 0xf5));
+                self.colors.normal = normal_colors(
+                    rgb(0x15, 0x19, 0x2d),
+                    rgb(0xf7, 0x76, 0x8e),
+                    rgb(0x9e, 0xce, 0x6a),
+                    rgb(0xe0, 0xaf, 0x68),
+                    rgb(0x7a, 0xa2, 0xf7),
+                    rgb(0xbb, 0x9a, 0xf7),
+                    rgb(0x7d, 0xcf, 0xff),
+                    rgb(0xa9, 0xb1, 0xd6),
+                );
+                self.colors.bright = bright_colors(
+                    rgb(0x41, 0x49, 0x68),
+                    rgb(0xff, 0x89, 0x9d),
+                    rgb(0xb9, 0xf2, 0x7c),
+                    rgb(0xff, 0xc7, 0x77),
+                    rgb(0x9a, 0xb8, 0xff),
+                    rgb(0xce, 0xb0, 0xff),
+                    rgb(0xa4, 0xda, 0xff),
+                    rgb(0xc0, 0xca, 0xf5),
+                );
+                self.window.background_gradient = Some(GradientConfig {
+                    start: rgb(0x1a, 0x1b, 0x26),
+                    end: rgb(0x24, 0x28, 0x3b),
+                    direction: GradientDirection::Diagonal,
+                });
+                self.window.tab_bar = TabBarConfig {
+                    style: TabBarStyle::Rounded,
+                    active_color: rgb(0x7a, 0xa2, 0xf7),
+                    inactive_color: rgb(0x41, 0x49, 0x68),
+                    text_color: rgb(0xc0, 0xca, 0xf5),
+                    height: 36,
+                };
+            },
+            ThemePreset::CatppuccinMocha => {
+                self.colors.primary.background = rgb(0x1e, 0x1e, 0x2e);
+                self.colors.primary.foreground = rgb(0xcd, 0xd6, 0xf4);
+                self.colors.primary.bright_foreground = Some(rgb(0xf5, 0xe0, 0xdc));
+                self.colors.normal = normal_colors(
+                    rgb(0x45, 0x47, 0x5a),
+                    rgb(0xf3, 0x8b, 0xa8),
+                    rgb(0xa6, 0xe3, 0xa1),
+                    rgb(0xf9, 0xe2, 0xaf),
+                    rgb(0x89, 0xb4, 0xfa),
+                    rgb(0xf5, 0xc2, 0xe7),
+                    rgb(0x94, 0xe2, 0xd5),
+                    rgb(0xba, 0xc2, 0xde),
+                );
+                self.colors.bright = bright_colors(
+                    rgb(0x58, 0x5b, 0x70),
+                    rgb(0xf6, 0x9c, 0xb5),
+                    rgb(0xb7, 0xef, 0xb2),
+                    rgb(0xfa, 0xe8, 0xc3),
+                    rgb(0x9f, 0xc5, 0xfb),
+                    rgb(0xf7, 0xcf, 0xeb),
+                    rgb(0xaa, 0xe9, 0xdd),
+                    rgb(0xda, 0xe0, 0xf7),
+                );
+                self.window.background_gradient = Some(GradientConfig {
+                    start: rgb(0x1e, 0x1e, 0x2e),
+                    end: rgb(0x31, 0x32, 0x44),
+                    direction: GradientDirection::Vertical,
+                });
+                self.window.tab_bar = TabBarConfig {
+                    style: TabBarStyle::Rounded,
+                    active_color: rgb(0x89, 0xb4, 0xfa),
+                    inactive_color: rgb(0x45, 0x47, 0x5a),
+                    text_color: rgb(0xcd, 0xd6, 0xf4),
+                    height: 36,
+                };
+            },
+            ThemePreset::Nord => {
+                self.colors.primary.background = rgb(0x2e, 0x34, 0x40);
+                self.colors.primary.foreground = rgb(0xd8, 0xde, 0xe9);
+                self.colors.primary.bright_foreground = Some(rgb(0xec, 0xef, 0xf4));
+                self.colors.normal = normal_colors(
+                    rgb(0x3b, 0x42, 0x52),
+                    rgb(0xbf, 0x61, 0x6a),
+                    rgb(0xa3, 0xbe, 0x8c),
+                    rgb(0xeb, 0xcb, 0x8b),
+                    rgb(0x81, 0xa1, 0xc1),
+                    rgb(0xb4, 0x8e, 0xad),
+                    rgb(0x88, 0xc0, 0xd0),
+                    rgb(0xe5, 0xe9, 0xf0),
+                );
+                self.colors.bright = bright_colors(
+                    rgb(0x4c, 0x56, 0x6a),
+                    rgb(0xcf, 0x7b, 0x84),
+                    rgb(0xb4, 0xcf, 0x9d),
+                    rgb(0xf2, 0xd4, 0xa0),
+                    rgb(0x92, 0xb3, 0xd3),
+                    rgb(0xc3, 0x9f, 0xbc),
+                    rgb(0x99, 0xcd, 0xdc),
+                    rgb(0xec, 0xef, 0xf4),
+                );
+                self.window.background_gradient = Some(GradientConfig {
+                    start: rgb(0x2e, 0x34, 0x40),
+                    end: rgb(0x3b, 0x42, 0x52),
+                    direction: GradientDirection::Diagonal,
+                });
+                self.window.tab_bar = TabBarConfig {
+                    style: TabBarStyle::Rounded,
+                    active_color: rgb(0x88, 0xc0, 0xd0),
+                    inactive_color: rgb(0x4c, 0x56, 0x6a),
+                    text_color: rgb(0xd8, 0xde, 0xe9),
+                    height: 36,
+                };
+            },
+            ThemePreset::Dracula => {
+                self.colors.primary.background = rgb(0x28, 0x2a, 0x36);
+                self.colors.primary.foreground = rgb(0xf8, 0xf8, 0xf2);
+                self.colors.primary.bright_foreground = Some(rgb(0xff, 0xff, 0xff));
+                self.colors.normal = normal_colors(
+                    rgb(0x21, 0x23, 0x2c),
+                    rgb(0xff, 0x55, 0x55),
+                    rgb(0x50, 0xfa, 0x7b),
+                    rgb(0xf1, 0xfa, 0x8c),
+                    rgb(0xbd, 0x93, 0xf9),
+                    rgb(0xff, 0x79, 0xc6),
+                    rgb(0x8b, 0xe9, 0xfd),
+                    rgb(0xf8, 0xf8, 0xf2),
+                );
+                self.colors.bright = bright_colors(
+                    rgb(0x62, 0x72, 0xa4),
+                    rgb(0xff, 0x6e, 0x6e),
+                    rgb(0x69, 0xff, 0x8f),
+                    rgb(0xf6, 0xff, 0xa5),
+                    rgb(0xca, 0xa9, 0xff),
+                    rgb(0xff, 0x92, 0xd0),
+                    rgb(0xa4, 0xf0, 0xff),
+                    rgb(0xff, 0xff, 0xff),
+                );
+                self.window.background_gradient = Some(GradientConfig {
+                    start: rgb(0x28, 0x2a, 0x36),
+                    end: rgb(0x44, 0x47, 0x5a),
+                    direction: GradientDirection::Vertical,
+                });
+                self.window.tab_bar = TabBarConfig {
+                    style: TabBarStyle::Rounded,
+                    active_color: rgb(0xbd, 0x93, 0xf9),
+                    inactive_color: rgb(0x44, 0x47, 0x5a),
+                    text_color: rgb(0xf8, 0xf8, 0xf2),
+                    height: 36,
+                };
+            },
+            ThemePreset::OneDark => {
+                self.colors.primary.background = rgb(0x28, 0x2c, 0x34);
+                self.colors.primary.foreground = rgb(0xab, 0xb2, 0xbf);
+                self.colors.primary.bright_foreground = Some(rgb(0xc8, 0xcc, 0xd4));
+                self.colors.normal = normal_colors(
+                    rgb(0x1e, 0x21, 0x27),
+                    rgb(0xe0, 0x6c, 0x75),
+                    rgb(0x98, 0xc3, 0x79),
+                    rgb(0xe5, 0xc0, 0x7b),
+                    rgb(0x61, 0xaf, 0xef),
+                    rgb(0xc6, 0x78, 0xdd),
+                    rgb(0x56, 0xb6, 0xc2),
+                    rgb(0xdc, 0xe0, 0xe8),
+                );
+                self.colors.bright = bright_colors(
+                    rgb(0x5c, 0x63, 0x70),
+                    rgb(0xe8, 0x7d, 0x86),
+                    rgb(0xa8, 0xcf, 0x89),
+                    rgb(0xeb, 0xcb, 0x8e),
+                    rgb(0x74, 0xbc, 0xf4),
+                    rgb(0xd0, 0x8d, 0xe5),
+                    rgb(0x68, 0xc5, 0xd0),
+                    rgb(0xe5, 0xe9, 0xf0),
+                );
+                self.window.background_gradient = Some(GradientConfig {
+                    start: rgb(0x28, 0x2c, 0x34),
+                    end: rgb(0x21, 0x24, 0x2b),
+                    direction: GradientDirection::Diagonal,
+                });
+                self.window.tab_bar = TabBarConfig {
+                    style: TabBarStyle::Rounded,
+                    active_color: rgb(0x61, 0xaf, 0xef),
+                    inactive_color: rgb(0x3e, 0x44, 0x51),
+                    text_color: rgb(0xab, 0xb2, 0xbf),
+                    height: 36,
+                };
+            },
+        }
+    }
+
     /// Derive [`TermConfig`] from the config.
     pub fn term_options(&self) -> TermConfig {
         TermConfig {
@@ -167,6 +363,36 @@ impl UiConfig {
     pub fn ipc_socket(&self) -> bool {
         self.ipc_socket.unwrap_or(self.general.ipc_socket)
     }
+}
+
+fn rgb(r: u8, g: u8, b: u8) -> crate::display::color::Rgb {
+    crate::display::color::Rgb::new(r, g, b)
+}
+
+fn normal_colors(
+    black: crate::display::color::Rgb,
+    red: crate::display::color::Rgb,
+    green: crate::display::color::Rgb,
+    yellow: crate::display::color::Rgb,
+    blue: crate::display::color::Rgb,
+    magenta: crate::display::color::Rgb,
+    cyan: crate::display::color::Rgb,
+    white: crate::display::color::Rgb,
+) -> crate::config::color::NormalColors {
+    crate::config::color::NormalColors { black, red, green, yellow, blue, magenta, cyan, white }
+}
+
+fn bright_colors(
+    black: crate::display::color::Rgb,
+    red: crate::display::color::Rgb,
+    green: crate::display::color::Rgb,
+    yellow: crate::display::color::Rgb,
+    blue: crate::display::color::Rgb,
+    magenta: crate::display::color::Rgb,
+    cyan: crate::display::color::Rgb,
+    white: crate::display::color::Rgb,
+) -> crate::config::color::BrightColors {
+    crate::config::color::BrightColors { black, red, green, yellow, blue, magenta, cyan, white }
 }
 
 /// Keyboard configuration.
