@@ -883,6 +883,9 @@ impl WindowContext {
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
 
+        // Force a display update so the newly active terminal is resized to match
+        // the current display dimensions (e.g. after the tab bar appeared/disappeared).
+        self.display.pending_update.dirty = true;
         self.dirty = true;
     }
 
@@ -937,6 +940,10 @@ impl WindowContext {
         // Remove the active pane from the tree.
         tab.root.close_active();
         // Borrow of `tab` ends here, allowing `activate_current_pane` to borrow `tab_manager`.
+
+        // Force a display update so the remaining pane's terminal is resized to fill
+        // the space that was freed when the closed pane was removed.
+        self.display.pending_update.dirty = true;
 
         // Activate the new active pane.
         self.activate_current_pane(proxy);

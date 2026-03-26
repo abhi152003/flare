@@ -782,9 +782,14 @@ impl Display {
             self.window.set_resize_increments(PhysicalSize::new(cell_width, cell_height));
         }
 
-        // Resize when terminal when its dimensions have changed.
+        // Resize terminal when its dimensions have changed. Also compare the terminal's
+        // actual size in case it was left at a stale size (e.g. after a tab switch where
+        // the display size_info was already updated for the tab bar, or after a split-pane
+        // close where the terminal still has the old split dimensions).
         if self.size_info.screen_lines() != new_size.screen_lines
             || self.size_info.columns() != new_size.columns()
+            || terminal.screen_lines() != new_size.screen_lines()
+            || terminal.columns() != new_size.columns()
         {
             // Resize PTY.
             pty_resize_handle.on_resize(new_size.into());
