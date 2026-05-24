@@ -794,13 +794,31 @@ impl WindowContext {
 
         let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
 
+        let future_tab_count = self.tab_manager.tab_count() + 1;
+        let tab_bar_offset = crate::display::reserved_tab_bar_height(
+            &self.config,
+            self.display.size_info.cell_height(),
+            future_tab_count,
+        );
+
+        let terminal_size = crate::display::SizeInfo::new(
+            self.display.size_info.width(),
+            self.display.size_info.height(),
+            self.display.size_info.cell_width(),
+            self.display.size_info.cell_height(),
+            self.display.size_info.padding_x(),
+            self.display.size_info.padding_y(),
+            false,
+            tab_bar_offset,
+        );
+
         let terminal =
-            Term::new(self.config.term_options(), &self.display.size_info, event_proxy.clone());
+            Term::new(self.config.term_options(), &terminal_size, event_proxy.clone());
         let terminal = Arc::new(FairMutex::new(terminal));
 
         let pty = match tty::new(
             &pty_config,
-            self.display.size_info.into(),
+            terminal_size.into(),
             self.display.window.id().into(),
         ) {
             Ok(pty) => pty,
@@ -882,6 +900,11 @@ impl WindowContext {
             let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
             event_proxy.send_event(TerminalEvent::CursorBlinkingChange.into());
         }
+
+        // Force a full repaint — the new tab's pixels completely replace the old
+        // tab's, so every cell must be redrawn regardless of per-terminal damage.
+        self.display.damage_tracker.frame().mark_fully_damaged();
+        self.display.damage_tracker.next_frame().mark_fully_damaged();
 
         // Force a display update so the newly active terminal is resized to match
         // the current display dimensions (e.g. after the tab bar appeared/disappeared).
