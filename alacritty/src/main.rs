@@ -45,6 +45,7 @@ mod panic;
 mod polling;
 mod renderer;
 mod scheduler;
+mod session;
 mod string;
 mod tab;
 mod window_context;

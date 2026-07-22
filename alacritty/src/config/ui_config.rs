@@ -42,6 +42,17 @@ use crate::config::window::{
 const URL_REGEX: &str = "(ipfs:|ipns:|magnet:|mailto:|gemini://|gopher://|https://|http://|news:|file:|git://|ssh:|ftp://)\
                          [^\u{0000}-\u{001F}\u{007F}-\u{009F}<>\"\\s{-}\\^⟨⟩`\\\\]+";
 
+#[derive(ConfigDeserialize, Serialize, Clone, Debug, PartialEq)]
+pub struct SessionConfig {
+    pub restore: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self { restore: true }
+    }
+}
+
 #[derive(ConfigDeserialize, Serialize, Default, Clone, Debug, PartialEq)]
 pub struct UiConfig {
     /// Miscellaneous configuration options.
@@ -87,6 +98,8 @@ pub struct UiConfig {
 
     /// Config for the alacritty_terminal itself.
     pub terminal: Terminal,
+
+    pub session: SessionConfig,
 
     /// Keyboard configuration.
     keyboard: Keyboard,

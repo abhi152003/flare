@@ -6,6 +6,7 @@ use std::io::Write;
 use std::mem;
 #[cfg(not(windows))]
 use std::os::unix::io::{AsRawFd, RawFd};
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
@@ -790,7 +791,19 @@ impl WindowContext {
 
     /// Create a new tab with a fresh PTY and terminal.
     pub fn create_new_tab(&mut self, proxy: &EventLoopProxy<Event>) {
-        let pty_config = self.config.pty_config();
+        let cwd = self.active_pane_cwd();
+        self.create_new_tab_with_cwd(proxy, cwd);
+    }
+
+    fn create_new_tab_with_cwd(
+        &mut self,
+        proxy: &EventLoopProxy<Event>,
+        cwd: Option<PathBuf>,
+    ) {
+        let mut pty_config = self.config.pty_config();
+        if cwd.is_some() {
+            pty_config.working_directory = cwd;
+        }
 
         let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
 
@@ -937,7 +950,8 @@ impl WindowContext {
         direction: tab::SplitDirection,
         proxy: &EventLoopProxy<Event>,
     ) {
-        let new_pane = match self.create_pane(proxy) {
+        let cwd = self.active_pane_cwd();
+        let new_pane = match self.create_pane(proxy, cwd) {
             Some(pane) => pane,
             None => return,
         };
@@ -999,9 +1013,123 @@ impl WindowContext {
         self.dirty = true;
     }
 
-    /// Create a new pane (terminal + PTY) with the current display configuration.
-    fn create_pane(&self, proxy: &EventLoopProxy<Event>) -> Option<tab::Pane> {
-        let pty_config = self.config.pty_config();
+    fn active_pane_cwd(&self) -> Option<PathBuf> {
+        #[cfg(not(windows))]
+        {
+            crate::daemon::foreground_process_path(self.master_fd, self.shell_pid).ok()
+        }
+        #[cfg(windows)]
+        {
+            None
+        }
+    }
+
+    fn pane_cwd(&self, pane: &tab::Pane) -> Option<PathBuf> {
+        #[cfg(not(windows))]
+        {
+            crate::daemon::foreground_process_path(pane.master_fd, pane.shell_pid).ok()
+        }
+        #[cfg(windows)]
+        {
+            let _ = pane;
+            None
+        }
+    }
+
+    pub fn collect_session(&self) -> Option<crate::session::SessionState> {
+        let tabs = self.tab_manager.tabs();
+
+        // Key the session by the first pane's CWD so it's naturally project-scoped.
+        let first_pane = tabs.first()?.active_pane();
+        let root = self.pane_cwd(first_pane).or_else(home::home_dir)?;
+        let cwd_of = |pane: &tab::Pane| self.pane_cwd(pane);
+
+        Some(crate::session::collect(root, tabs, cwd_of))
+    }
+
+    /// Replay a saved session into this window.
+    ///
+    /// The first pane of the first tab already exists, so its CWD is set via `cd`. Remaining
+    /// panes are created by splits with explicit CWDs; additional tabs are spawned normally.
+    pub fn restore_session(
+        &mut self,
+        session: &crate::session::SessionState,
+        proxy: &EventLoopProxy<Event>,
+    ) {
+        const MAX_PANES: usize = 20;
+
+        let mut tabs = session.tabs.iter().peekable();
+        let Some(first_tab) = tabs.next() else {
+            return;
+        };
+
+        let leaves = first_tab_leaves(&first_tab.root);
+        if let Some(first_cwd) = leaves.first() {
+            if let Some(cmd) = make_cd_command(first_cwd) {
+                let _ = self.notifier.0.send(Msg::Input(cmd.into()));
+            }
+        }
+
+        let mut created = 1usize;
+        for cwd in leaves.iter().skip(1) {
+            if created >= MAX_PANES {
+                break;
+            }
+            let direction = if created % 2 == 0 {
+                tab::SplitDirection::Horizontal
+            } else {
+                tab::SplitDirection::Vertical
+            };
+            self.split_active_pane_with_cwd(direction, cwd.clone(), proxy);
+            created += 1;
+        }
+
+        for tab_state in tabs {
+            let tab_leaves = first_tab_leaves(&tab_state.root);
+            let first_cwd = tab_leaves.first().cloned();
+            self.create_new_tab_with_cwd(proxy, sanitize_cwd(first_cwd.as_deref()));
+
+            for cwd in tab_leaves.iter().skip(1) {
+                if created >= MAX_PANES {
+                    break;
+                }
+                let direction = if created % 2 == 0 {
+                    tab::SplitDirection::Horizontal
+                } else {
+                    tab::SplitDirection::Vertical
+                };
+                self.split_active_pane_with_cwd(direction, cwd.clone(), proxy);
+                created += 1;
+            }
+        }
+
+        self.activate_tab(0, proxy);
+        self.dirty = true;
+    }
+
+    fn split_active_pane_with_cwd(
+        &mut self,
+        direction: tab::SplitDirection,
+        cwd: PathBuf,
+        proxy: &EventLoopProxy<Event>,
+    ) {
+        let new_pane = match self.create_pane(proxy, Some(cwd)) {
+            Some(pane) => pane,
+            None => return,
+        };
+        self.tab_manager.active_tab_mut().root.split_active(direction, new_pane);
+        self.activate_current_pane(proxy);
+    }
+
+    fn create_pane(
+        &self,
+        proxy: &EventLoopProxy<Event>,
+        cwd: Option<PathBuf>,
+    ) -> Option<tab::Pane> {
+        let mut pty_config = self.config.pty_config();
+        if let Some(cwd) = cwd {
+            pty_config.working_directory = Some(cwd);
+        }
         let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
 
         let terminal =
@@ -1171,5 +1299,42 @@ impl Drop for WindowContext {
                 let _ = pane.notifier.0.send(Msg::Shutdown);
             }
         }
+    }
+}
+
+// Session-restore helpers.
+
+fn first_tab_leaves(node: &crate::session::PaneNodeState) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    collect_session_leaves(node, &mut out);
+    out
+}
+
+fn collect_session_leaves(node: &crate::session::PaneNodeState, out: &mut Vec<PathBuf>) {
+    match node {
+        crate::session::PaneNodeState::Leaf { cwd } => out.push(cwd.clone()),
+        crate::session::PaneNodeState::Split { first, second, .. } => {
+            collect_session_leaves(first, out);
+            collect_session_leaves(second, out);
+        }
+    }
+}
+
+fn make_cd_command(path: &Path) -> Option<Vec<u8>> {
+    let s = path.to_str()?;
+    if s.is_empty() {
+        return None;
+    }
+    // Single-quote and escape embedded quotes so spaces/special chars survive.
+    let quoted = s.replace('\'', "'\\''");
+    Some(format!("cd '{quoted}'\n").into_bytes())
+}
+
+fn sanitize_cwd(path: Option<&Path>) -> Option<PathBuf> {
+    let path = path?;
+    if path.is_dir() {
+        Some(path.to_path_buf())
+    } else {
+        None
     }
 }

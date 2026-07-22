@@ -205,6 +205,26 @@ impl Processor {
         }
     }
 
+    fn restore_enabled(&self) -> bool {
+        self.config.session.restore && !self.cli_options.no_restore
+    }
+
+    fn save_all_sessions(&self) {
+        if !self.restore_enabled() {
+            return;
+        }
+        for window in self.windows.values() {
+            match window.collect_session() {
+                Some(state) => {
+                    if let Err(err) = crate::session::save(&state) {
+                        log::warn!("Failed to save session: {err}");
+                    }
+                },
+                None => log::debug!("Skipped session save: no usable root directory"),
+            }
+        }
+    }
+
     /// Check if an event is irrelevant and can be skipped.
     fn skip_window_event(event: &WindowEvent) -> bool {
         matches!(
@@ -240,6 +260,32 @@ impl ApplicationHandler<Event> for Processor {
                 self.initial_window_error = Some(err);
                 event_loop.exit();
                 return;
+            }
+        }
+
+        // Restore the most-recent session into the initial window.
+        if self.restore_enabled() {
+            if let Some(window_id) = self.windows.keys().next().copied() {
+                if let Some(session) = crate::session::most_recent() {
+                    if let Some(window) = self.windows.get_mut(&window_id) {
+                        window.restore_session(&session, &self.proxy);
+                    }
+                }
+            }
+        }
+
+        // Schedule periodic session autosave as a crash-recovery safety net.
+        if self.restore_enabled() {
+            if let Some(window_id) = self.windows.keys().next().copied() {
+                let timer_id = TimerId::new(Topic::SessionSave, window_id);
+                if !self.scheduler.scheduled(timer_id) {
+                    self.scheduler.schedule(
+                        Event::new(EventType::SessionSave, window_id),
+                        Duration::from_secs(60),
+                        true,
+                        timer_id,
+                    );
+                }
             }
         }
 
@@ -459,6 +505,9 @@ impl ApplicationHandler<Event> for Processor {
                     }
                 }
             },
+            (EventType::SessionSave, _) => {
+                self.save_all_sessions();
+            },
             (payload, Some(window_id)) => {
                 if let Some(window_context) = self.windows.get_mut(window_id) {
                     window_context.handle_event(
@@ -504,6 +553,9 @@ impl ApplicationHandler<Event> for Processor {
         if self.config.debug.print_events {
             info!("Exiting the event loop");
         }
+
+        // Persist session state before any windows are torn down.
+        self.save_all_sessions();
 
         match self.gl_config.take().map(|config| config.display()) {
             #[cfg(not(target_os = "macos"))]
@@ -567,6 +619,7 @@ pub enum EventType {
     #[cfg(unix)]
     Shutdown,
     Frame,
+    SessionSave,
 }
 
 impl From<TerminalEvent> for EventType {
@@ -2014,7 +2067,8 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::Message(_)
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)
-                | EventType::Frame => (),
+                | EventType::Frame
+                | EventType::SessionSave => (),
             },
             WinitEvent::WindowEvent { event, .. } => {
                 match event {
