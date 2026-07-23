@@ -858,6 +858,7 @@ impl Display {
         search_state: &mut SearchState,
         tab_bar_info: Option<(&[String], usize)>,
         close_button_hovered: bool,
+        palette: &crate::palette::PaletteState,
     ) {
         // Collect renderable content before the terminal is dropped.
         let mut content = RenderableContent::new(config, self, &terminal, search_state);
@@ -1315,9 +1316,12 @@ impl Display {
             }
         }
 
-        self.draw_render_timer(config);
+        // Draw the palette overlay on top of everything (single-pane path).
+        if palette.is_open() {
+            self.draw_palette(config, palette);
+        }
 
-        // Draw hyperlink uri preview.
+        self.draw_render_timer(config);
         if has_highlighted_hint {
             let cursor_point = vi_cursor_point.or(Some(cursor_point));
             self.draw_hyperlink_preview(config, cursor_point, display_offset);
@@ -1366,6 +1370,7 @@ impl Display {
         search_state: &mut SearchState,
         tab_bar_info: Option<(&[String], usize)>,
         close_button_hovered: bool,
+        palette: &crate::palette::PaletteState,
     ) {
         let size_info = self.size_info;
         let metrics = self.glyph_cache.font_metrics();
@@ -1575,6 +1580,11 @@ impl Display {
                     glyph_cache,
                 );
             }
+        }
+
+        // Draw the palette overlay on top of everything (split-pane path).
+        if palette.is_open() {
+            self.draw_palette(config, palette);
         }
 
         self.draw_render_timer(config);
@@ -2090,6 +2100,84 @@ impl Display {
             &mut self.glyph_cache,
         );
     }
+
+    /// Draw the palette overlay centered over the terminal.
+    fn draw_palette(&mut self, config: &UiConfig, palette: &crate::palette::PaletteState) {
+        let size_info = self.size_info;
+
+        let visible = palette.visible();
+        let rows = visible.len() + 2;
+        let box_width = (size_info.width() * 0.6).max(360.0);
+        let box_height = (rows as f32 * size_info.cell_height()) + 16.0;
+        let box_x = (size_info.width() - box_width) / 2.0;
+        let box_y = (size_info.height() - box_height) / 2.0;
+
+        let bg = config.colors.primary.background;
+        let accent = config.window.tab_bar.active_color;
+        let dim = Rgb::new(90, 90, 110);
+        let text_fg = config.colors.primary.foreground;
+        let row_h = size_info.cell_height();
+
+        // Dimmed backdrop, popup container, and selected-row highlight.
+        let selected_y = box_y + 8.0 + row_h + (palette.selected() as f32 * row_h);
+        let rects = vec![
+            RenderRect::new(0.0, 0.0, size_info.width(), size_info.height(), bg, 0.55),
+            RenderRect::new(box_x, box_y, box_width, box_height, bg, 0.97),
+            RenderRect::new(box_x + 6.0, selected_y, box_width - 12.0, row_h, accent, 0.35),
+        ];
+        self.renderer
+            .draw_rects(&size_info, &self.glyph_cache.font_metrics(), rects);
+
+        // Text rows. draw_string places text at column 0 offset by padding_x/padding_y, so we
+        // synthesize a SizeInfo whose padding lands each row at the desired pixel.
+        let cols = ((box_width - 20.0) / size_info.cell_width()) as usize;
+        self.draw_palette_row("Switch to directory  (Enter=open, Esc=close)", 0, dim, bg, box_x, box_y, row_h, cols, size_info);
+        self.draw_palette_row(&format!("> {}", palette.query()), 1, text_fg, bg, box_x, box_y, row_h, cols, size_info);
+        for (i, (_, entry)) in visible.iter().enumerate() {
+            let fg = if i == palette.selected() { accent } else { text_fg };
+            self.draw_palette_row(&entry.root.display().to_string(), i + 2, fg, bg, box_x, box_y, row_h, cols, size_info);
+        }
+
+        // Damage so the overlay repaints even when the grid is idle.
+        self.damage_tracker.frame().mark_fully_damaged();
+        self.damage_tracker.next_frame().mark_fully_damaged();
+    }
+
+    fn draw_palette_row(
+        &mut self,
+        text: &str,
+        y_row: usize,
+        fg: Rgb,
+        bg: Rgb,
+        box_x: f32,
+        box_y: f32,
+        row_h: f32,
+        cols: usize,
+        size_info: SizeInfo,
+    ) {
+        let pad_y = box_y + 8.0 + (y_row as f32 * row_h);
+        let text_size = SizeInfo::new(
+            size_info.width(),
+            size_info.height(),
+            size_info.cell_width(),
+            size_info.cell_height(),
+            box_x + 10.0,
+            pad_y,
+            false,
+            0.0,
+        );
+        let truncated: String = text.chars().take(cols).collect();
+        self.renderer.draw_string(
+            Point::new(0usize, Column(0)),
+            fg,
+            bg,
+            truncated.chars(),
+            &text_size,
+            &mut self.glyph_cache,
+        );
+    }
+
+
 
     /// Draw render timer.
     #[inline(never)]

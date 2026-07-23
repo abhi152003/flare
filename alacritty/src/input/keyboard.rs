@@ -61,6 +61,12 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             return;
         }
 
+        // When the palette is open, keystrokes feed the query instead of the terminal.
+        if self.ctx.palette_active() {
+            self.palette_input(&key, &text);
+            return;
+        }
+
         if self.ctx.search_active() {
             for character in text.chars() {
                 self.ctx.search_input(character);
@@ -176,7 +182,8 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// The provided mode, mods, and key must match what is allowed by a binding
     /// for its action to be executed.
     fn process_key_bindings(&mut self, key: &KeyEvent) -> bool {
-        let mode = BindingMode::new(self.ctx.terminal().mode(), self.ctx.search_active());
+        let mode =
+            BindingMode::new(self.ctx.terminal().mode(), self.ctx.search_active(), self.ctx.palette_active());
         let mods = self.ctx.modifiers().state();
 
         // Don't suppress char if no bindings were triggered.
@@ -246,6 +253,54 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
         }
 
         suppress_chars.unwrap_or(false)
+    }
+
+    /// Route keyboard input to the open palette: special keys navigate/confirm, text feeds the
+    /// query.
+    fn palette_input(&mut self, key: &KeyEvent, text: &str) {
+        if let Key::Named(named) = &key.logical_key {
+            match named {
+                NamedKey::ArrowUp => {
+                    if let Some(p) = self.ctx.palette_state_mut() {
+                        p.move_up();
+                    }
+                    self.ctx.mark_dirty();
+                    return;
+                },
+                NamedKey::ArrowDown => {
+                    if let Some(p) = self.ctx.palette_state_mut() {
+                        p.move_down();
+                    }
+                    self.ctx.mark_dirty();
+                    return;
+                },
+                NamedKey::Enter => {
+                    if let Some(session) =
+                        self.ctx.palette_state_mut().and_then(|p| p.selected_session())
+                    {
+                        self.ctx.restore_session(session);
+                    }
+                    return;
+                },
+                NamedKey::Backspace => {
+                    if let Some(p) = self.ctx.palette_state_mut() {
+                        p.backspace();
+                    }
+                    self.ctx.mark_dirty();
+                    return;
+                },
+                _ => (),
+            }
+        }
+
+        for character in text.chars() {
+            if !character.is_control() {
+                if let Some(p) = self.ctx.palette_state_mut() {
+                    p.input(character);
+                }
+            }
+        }
+        self.ctx.mark_dirty();
     }
 
     /// Handle key release.

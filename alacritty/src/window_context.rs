@@ -73,6 +73,7 @@ pub struct WindowContext {
     config: Rc<UiConfig>,
     tab_manager: TabManager,
     close_button_hovered: bool,
+    palette_state: crate::palette::PaletteState,
 }
 
 impl WindowContext {
@@ -278,6 +279,7 @@ impl WindowContext {
             dirty: Default::default(),
             tab_manager,
             close_button_hovered: false,
+            palette_state: Default::default(),
         })
     }
 
@@ -561,6 +563,7 @@ impl WindowContext {
                 &mut self.search_state,
                 tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
                 self.close_button_hovered,
+                &self.palette_state,
             );
         } else {
             // Single pane: use the standard draw path.
@@ -573,6 +576,7 @@ impl WindowContext {
                 &mut self.search_state,
                 tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
                 self.close_button_hovered,
+                &self.palette_state,
             );
         }
     }
@@ -655,6 +659,7 @@ impl WindowContext {
 
         let old_is_searching = self.search_state.history_index.is_some();
         let mut pending_tab_action = None;
+        let mut pending_session_restore = None;
 
         let pending_events = mem::take(&mut self.event_queue);
         let mut pending_events = pending_events.into_iter();
@@ -687,6 +692,8 @@ impl WindowContext {
                 clipboard,
                 scheduler,
                 pending_tab_action: &mut pending_tab_action,
+                palette_state: &mut self.palette_state,
+                pending_session_restore: &mut pending_session_restore,
             };
             let mut processor = input::Processor::new(context);
             processor.handle_event(event);
@@ -723,6 +730,12 @@ impl WindowContext {
             if old_tab_count != new_tab_count {
                 self.display.pending_update.dirty = true;
             }
+        }
+
+        // Process a pending palette-triggered session restore.
+        if let Some(session) = pending_session_restore {
+            self.restore_session(&session, event_proxy);
+            self.display.pending_update.dirty = true;
         }
 
         // Re-acquire the terminal lock for display updates.

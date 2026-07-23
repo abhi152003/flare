@@ -768,6 +768,8 @@ pub struct ActionContext<'a, N, T> {
     #[cfg(not(windows))]
     pub shell_pid: u32,
     pub pending_tab_action: &'a mut Option<TabAction>,
+    pub palette_state: &'a mut crate::palette::PaletteState,
+    pub pending_session_restore: &'a mut Option<crate::session::SessionState>,
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionContext<'a, N, T> {
@@ -1629,6 +1631,27 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn switch_pane_down(&mut self) {
         *self.pending_tab_action = Some(TabAction::SwitchPaneDown);
+    }
+
+    fn toggle_palette(&mut self) {
+        self.palette_state.toggle();
+        *self.dirty = true;
+        self.display.damage_tracker.frame().mark_fully_damaged();
+        self.display.damage_tracker.next_frame().mark_fully_damaged();
+    }
+
+    fn palette_active(&self) -> bool {
+        self.palette_state.is_open()
+    }
+
+    fn palette_state_mut(&mut self) -> Option<&mut crate::palette::PaletteState> {
+        Some(self.palette_state)
+    }
+
+    fn restore_session(&mut self, session: crate::session::SessionState) {
+        self.palette_state.close();
+        *self.pending_session_restore = Some(session);
+        *self.dirty = true;
     }
 }
 
