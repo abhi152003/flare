@@ -2133,9 +2133,24 @@ impl Display {
         let cols = ((box_width - 20.0) / size_info.cell_width()) as usize;
         self.draw_palette_row("Switch to directory  (Enter=open, Esc=close)", 0, dim, bg, box_x, box_y, row_h, cols, size_info);
         self.draw_palette_row(&format!("> {}", palette.query()), 1, text_fg, bg, box_x, box_y, row_h, cols, size_info);
-        for (i, (_, entry)) in visible.iter().enumerate() {
-            let fg = if i == palette.selected() { accent } else { text_fg };
-            self.draw_palette_row(&entry.root.display().to_string(), i + 2, fg, bg, box_x, box_y, row_h, cols, size_info);
+
+        if visible.is_empty() {
+            self.draw_palette_row(
+                "No saved sessions yet — quit Flare to save this one",
+                2,
+                dim,
+                bg,
+                box_x,
+                box_y,
+                row_h,
+                cols,
+                size_info,
+            );
+        } else {
+            for (i, (_, entry)) in visible.iter().enumerate() {
+                let fg = if i == palette.selected() { accent } else { text_fg };
+                self.draw_palette_row(&entry.root.display().to_string(), i + 2, fg, bg, box_x, box_y, row_h, cols, size_info);
+            }
         }
 
         // Damage so the overlay repaints even when the grid is idle.

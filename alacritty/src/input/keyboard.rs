@@ -260,6 +260,10 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     fn palette_input(&mut self, key: &KeyEvent, text: &str) {
         if let Key::Named(named) = &key.logical_key {
             match named {
+                NamedKey::Escape => {
+                    self.ctx.toggle_palette();
+                    return;
+                },
                 NamedKey::ArrowUp => {
                     if let Some(p) = self.ctx.palette_state_mut() {
                         p.move_up();
