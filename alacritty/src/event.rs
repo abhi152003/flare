@@ -255,21 +255,36 @@ impl ApplicationHandler<Event> for Processor {
             return;
         }
 
-        if let Some(window_options) = self.initial_window_options.take() {
-            if let Err(err) = self.create_initial_window(event_loop, window_options) {
-                self.initial_window_error = Some(err);
-                event_loop.exit();
-                return;
+        let mut window_options = match self.initial_window_options.take() {
+            Some(opts) => opts,
+            None => return,
+        };
+
+        // Pre-load the session so the initial pane can spawn in the saved CWD directly,
+        // avoiding an echoed `cd` command.
+        let saved_session = if self.restore_enabled() {
+            crate::session::most_recent()
+        } else {
+            None
+        };
+        if let Some(session) = &saved_session {
+            if let Some(cwd) = first_pane_cwd(session) {
+                window_options.terminal_options.working_directory = Some(cwd);
             }
         }
 
-        // Restore the most-recent session into the initial window.
-        if self.restore_enabled() {
+        if let Err(err) = self.create_initial_window(event_loop, window_options) {
+            self.initial_window_error = Some(err);
+            event_loop.exit();
+            return;
+        }
+
+        // Replay the saved session's additional tabs/panes (the first pane is already spawned
+        // in the right directory above).
+        if let Some(session) = saved_session {
             if let Some(window_id) = self.windows.keys().next().copied() {
-                if let Some(session) = crate::session::most_recent() {
-                    if let Some(window) = self.windows.get_mut(&window_id) {
-                        window.restore_session(&session, &self.proxy);
-                    }
+                if let Some(window) = self.windows.get_mut(&window_id) {
+                    window.restore_session(&session, &self.proxy);
                 }
             }
         }
@@ -576,6 +591,18 @@ impl ApplicationHandler<Event> for Processor {
         // SAFETY: The clipboard must be dropped before the event loop, so use the nop clipboard
         // as a safe placeholder.
         self.clipboard = Clipboard::new_nop();
+    }
+}
+
+/// Extract the first (leftmost) leaf CWD from a saved session, for spawning the initial pane.
+fn first_pane_cwd(session: &crate::session::SessionState) -> Option<std::path::PathBuf> {
+    let tab = session.tabs.first()?;
+    let mut node = &tab.root;
+    loop {
+        match node {
+            crate::session::PaneNodeState::Leaf { cwd } => return Some(cwd.clone()),
+            crate::session::PaneNodeState::Split { first, .. } => node = first,
+        }
     }
 }
 

@@ -1077,12 +1077,9 @@ impl WindowContext {
         };
 
         let leaves = first_tab_leaves(&first_tab.root);
-        if let Some(first_cwd) = leaves.first() {
-            if let Some(cmd) = make_cd_command(first_cwd) {
-                let _ = self.notifier.0.send(Msg::Input(cmd.into()));
-            }
-        }
 
+        // The first pane already spawned with the saved CWD (injected before window creation),
+        // so only replay additional splits.
         let mut created = 1usize;
         for cwd in leaves.iter().skip(1) {
             if created >= MAX_PANES {
@@ -1331,16 +1328,6 @@ fn collect_session_leaves(node: &crate::session::PaneNodeState, out: &mut Vec<Pa
             collect_session_leaves(second, out);
         }
     }
-}
-
-fn make_cd_command(path: &Path) -> Option<Vec<u8>> {
-    let s = path.to_str()?;
-    if s.is_empty() {
-        return None;
-    }
-    // Single-quote and escape embedded quotes so spaces/special chars survive.
-    let quoted = s.replace('\'', "'\\''");
-    Some(format!("cd '{quoted}'\n").into_bytes())
 }
 
 fn sanitize_cwd(path: Option<&Path>) -> Option<PathBuf> {
