@@ -487,6 +487,18 @@ impl ApplicationHandler<Event> for Processor {
                 }
             },
             (EventType::Terminal(TerminalEvent::Exit), Some(window_id)) => {
+                // Persist this window's session before it's torn down, since the window (and
+                // its cached CWDs) is dropped below.
+                if self.restore_enabled() {
+                    if let Some(window) = self.windows.get(window_id) {
+                        if let Some(state) = window.collect_session() {
+                            if let Err(err) = crate::session::save(&state) {
+                                log::warn!("Failed to save session: {err}");
+                            }
+                        }
+                    }
+                }
+
                 // Remove the closed terminal.
                 let window_context = match self.windows.entry(*window_id) {
                     // Don't exit when terminal exits if user asked to hold the window.
