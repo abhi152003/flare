@@ -2149,7 +2149,17 @@ impl Display {
         } else {
             for (i, (_, entry)) in visible.iter().enumerate() {
                 let fg = if i == palette.selected() { accent } else { text_fg };
-                self.draw_palette_row(&entry.root.display().to_string(), i + 2, fg, bg, box_x, box_y, row_h, cols, size_info);
+                self.draw_palette_row(
+                    &shorten_path(&entry.root),
+                    i + 2,
+                    fg,
+                    bg,
+                    box_x,
+                    box_y,
+                    row_h,
+                    cols,
+                    size_info,
+                );
             }
         }
 
@@ -2191,8 +2201,6 @@ impl Display {
             &mut self.glyph_cache,
         );
     }
-
-
 
     /// Draw render timer.
     #[inline(never)]
@@ -2500,4 +2508,29 @@ fn window_size(
     let height = (padding.1).mul_add(2., grid_height).floor();
 
     PhysicalSize::new(width as u32, height as u32)
+}
+
+/// Compact a path for display: replace the home prefix with `~`, and if still long keep only the
+/// last few segments.
+fn shorten_path(path: &std::path::Path) -> String {
+    use std::path::Path;
+
+    let s = match home::home_dir() {
+        Some(home) if path.starts_with(&home) => {
+            format!("~/{}", path.strip_prefix(&home).unwrap_or(Path::new("")).display())
+        },
+        _ => path.display().to_string(),
+    };
+
+    const MAX_LEN: usize = 40;
+    if s.len() <= MAX_LEN {
+        return s;
+    }
+
+    let segments: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
+    if segments.len() <= 3 {
+        return s;
+    }
+    let tail = segments[segments.len() - 3..].join("/");
+    format!("…/{}", tail)
 }

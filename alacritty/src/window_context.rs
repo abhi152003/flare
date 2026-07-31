@@ -1038,6 +1038,11 @@ impl WindowContext {
     }
 
     fn pane_cwd(&self, pane: &tab::Pane) -> Option<PathBuf> {
+        // Prefer the CWD the shell reported via OSC 7 (always accurate, even at exit time).
+        if let Some(cwd) = pane.terminal.lock().cwd.clone() {
+            return Some(cwd);
+        }
+        // Fallback: read /proc/<pid>/cwd while the shell process is still alive.
         #[cfg(not(windows))]
         {
             crate::daemon::foreground_process_path(pane.master_fd, pane.shell_pid).ok()

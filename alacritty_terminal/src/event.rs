@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::fmt::{self, Debug, Formatter};
+use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::sync::Arc;
 
@@ -51,6 +52,9 @@ pub enum Event {
     /// Terminal bell ring.
     Bell,
 
+    /// Working directory reported by the shell via OSC 7.
+    Cwd(PathBuf),
+
     /// Shutdown request.
     Exit,
 
@@ -72,6 +76,7 @@ impl Debug for Event {
             Event::ResetTitle => write!(f, "ResetTitle"),
             Event::Wakeup => write!(f, "Wakeup"),
             Event::Bell => write!(f, "Bell"),
+            Event::Cwd(path) => write!(f, "Cwd({})", path.display()),
             Event::Exit => write!(f, "Exit"),
             Event::ChildExit(status) => write!(f, "ChildExit({status:?})"),
         }

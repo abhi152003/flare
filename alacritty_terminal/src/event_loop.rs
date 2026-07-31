@@ -15,6 +15,7 @@ use log::error;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
 
 use crate::event::{self, Event, EventListener, WindowSize};
+use crate::osc7::Osc7Scanner;
 use crate::sync::FairMutex;
 use crate::term::Term;
 use crate::{thread, tty};
@@ -149,6 +150,11 @@ where
             if let Some(writer) = &mut writer {
                 writer.write_all(&buf[..unprocessed]).unwrap();
             }
+
+            // Scan for OSC 7 working-directory reports before parsing.
+            state.osc7.feed(&buf[..unprocessed], |path| {
+                (*terminal).set_cwd(path);
+            });
 
             // Parse the incoming bytes.
             state.parser.advance(&mut **terminal, &buf[..unprocessed]);
@@ -403,6 +409,7 @@ pub struct State {
     write_list: VecDeque<Cow<'static, [u8]>>,
     writing: Option<Writing>,
     parser: ansi::Processor,
+    osc7: Osc7Scanner,
 }
 
 impl State {
