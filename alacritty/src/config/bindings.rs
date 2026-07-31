@@ -275,6 +275,9 @@ pub enum Action {
 
     /// Close the active tab.
     CloseTab,
+
+    /// Toggle the directory/session switcher palette.
+    TogglePalette,
 }
 
 impl From<&'static str> for Action {
@@ -615,6 +618,9 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         ArrowRight, ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneRight;
         ArrowUp,    ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneUp;
         ArrowDown,  ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneDown;
+
+        // Flare palette keybinding.
+        "p",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::TogglePalette;
     ));
 
     bindings
@@ -817,20 +823,22 @@ bitflags! {
         const APP_KEYPAD             = 0b0000_0010;
         const ALT_SCREEN             = 0b0000_0100;
         const VI                     = 0b0000_1000;
-        const SEARCH                 = 0b0001_0000;
+        const SEARCH                 = 0b0000_0001_0000;
         const DISAMBIGUATE_ESC_CODES = 0b0010_0000;
         const REPORT_ALL_KEYS_AS_ESC = 0b0100_0000;
+        const PALETTE                = 0b1000_0000;
     }
 }
 
 impl BindingMode {
-    pub fn new(mode: &TermMode, search: bool) -> BindingMode {
+    pub fn new(mode: &TermMode, search: bool, palette: bool) -> BindingMode {
         let mut binding_mode = BindingMode::empty();
         binding_mode.set(BindingMode::APP_CURSOR, mode.contains(TermMode::APP_CURSOR));
         binding_mode.set(BindingMode::APP_KEYPAD, mode.contains(TermMode::APP_KEYPAD));
         binding_mode.set(BindingMode::ALT_SCREEN, mode.contains(TermMode::ALT_SCREEN));
         binding_mode.set(BindingMode::VI, mode.contains(TermMode::VI));
         binding_mode.set(BindingMode::SEARCH, search);
+        binding_mode.set(BindingMode::PALETTE, palette);
         binding_mode.set(
             BindingMode::DISAMBIGUATE_ESC_CODES,
             mode.contains(TermMode::DISAMBIGUATE_ESC_CODES),
@@ -884,6 +892,8 @@ impl<'a> Deserialize<'a> for ModeWrapper {
                         "~vi" => res.not_mode |= BindingMode::VI,
                         "search" => res.mode |= BindingMode::SEARCH,
                         "~search" => res.not_mode |= BindingMode::SEARCH,
+                        "palette" => res.mode |= BindingMode::PALETTE,
+                        "~palette" => res.not_mode |= BindingMode::PALETTE,
                         _ => return Err(E::invalid_value(Unexpected::Str(modifier), &self)),
                     }
                 }

@@ -159,6 +159,11 @@ pub trait ActionContext<T: EventListener> {
     fn switch_pane_right(&mut self) {}
     fn switch_pane_up(&mut self) {}
     fn switch_pane_down(&mut self) {}
+
+    fn toggle_palette(&mut self) {}
+    fn palette_active(&self) -> bool { false }
+    fn palette_state_mut(&mut self) -> Option<&mut crate::palette::PaletteState> { None }
+    fn restore_session(&mut self, _session: crate::session::SessionState) {}
 }
 
 impl Action {
@@ -470,6 +475,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SwitchPaneRight => ctx.switch_pane_right(),
             Action::SwitchPaneUp => ctx.switch_pane_up(),
             Action::SwitchPaneDown => ctx.switch_pane_down(),
+            Action::TogglePalette => ctx.toggle_palette(),
             _ => (),
         }
     }
@@ -1067,7 +1073,8 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
     /// The provided mode, mods, and key must match what is allowed by a binding
     /// for its action to be executed.
     fn process_mouse_bindings(&mut self, event: MouseEvent) -> bool {
-        let mode = BindingMode::new(self.ctx.terminal().mode(), self.ctx.search_active());
+        let mode =
+            BindingMode::new(self.ctx.terminal().mode(), self.ctx.search_active(), self.ctx.palette_active());
         let mouse_mode = self.ctx.mouse_mode();
         let mods = self.ctx.modifiers().state();
         let mouse_bindings = self.ctx.config().mouse_bindings().to_owned();

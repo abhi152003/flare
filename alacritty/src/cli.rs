@@ -66,6 +66,10 @@ pub struct Options {
     #[clap(long)]
     pub daemon: bool,
 
+    /// Do not restore the previous session on startup.
+    #[clap(long)]
+    pub no_restore: bool,
+
     /// CLI options for config overrides.
     #[clap(skip)]
     pub config_options: ParsedOptions,

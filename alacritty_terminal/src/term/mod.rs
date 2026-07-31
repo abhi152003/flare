@@ -1,6 +1,7 @@
 //! Exports the `Term` type which is a high-level API for the Grid.
 
 use std::ops::{Index, IndexMut, Range};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::{cmp, mem, ptr, slice, str};
 
@@ -312,6 +313,9 @@ pub struct Term<T> {
     /// Current title of the window.
     title: Option<String>,
 
+    /// Working directory last reported by the shell via OSC 7, if any.
+    pub cwd: Option<PathBuf>,
+
     /// Stack of saved window titles. When a title is popped from this stack, the `title` for the
     /// term is set.
     title_stack: Vec<Option<String>>,
@@ -440,8 +444,18 @@ impl<T> Term<T> {
             is_focused: Default::default(),
             selection: Default::default(),
             title: Default::default(),
+            cwd: Default::default(),
             mode: Default::default(),
         }
+    }
+
+    /// Set the working directory reported via OSC 7 and notify the UI.
+    pub fn set_cwd(&mut self, cwd: PathBuf)
+    where
+        T: EventListener,
+    {
+        self.cwd = Some(cwd.clone());
+        self.event_proxy.send_event(Event::Cwd(cwd));
     }
 
     /// Collect the information about the changes in the lines, which

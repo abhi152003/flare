@@ -39,12 +39,14 @@ mod logging;
 mod macos;
 mod message_bar;
 mod migrate;
+mod palette;
 #[cfg(windows)]
 mod panic;
 #[cfg(unix)]
 mod polling;
 mod renderer;
 mod scheduler;
+mod session;
 mod string;
 mod tab;
 mod window_context;

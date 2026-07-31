@@ -92,6 +92,33 @@ Typical config paths on Linux:
 4. `$HOME/.alacritty.toml`
 5. `/etc/alacritty/alacritty.toml`
 
+## Shell Integration
+
+Flare tracks each pane's working directory so that new tabs, split panes, and session restore open
+in the right folder. For best results, add a few lines to your shell config so it reports its
+directory to Flare via the OSC 7 escape sequence. Without this Flare still works (it falls back to
+reading the process directory), but the shell-reported value is more reliable — especially at quit
+time.
+
+**zsh** (`~/.zshrc`):
+```sh
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _flare_report_cwd
+_flare_report_cwd() { printf '\e]7;%s\a' "file://$HOST$PWD" }
+```
+
+**bash** (`~/.bashrc`):
+```sh
+PROMPT_COMMAND='printf "\\e]7;file://%s%s\\a" "$HOSTNAME" "$PWD"'
+```
+
+**fish** — fish already emits OSC 7 in many setups; if not, add to `~/.config/fish/config.fish`:
+```fish
+function _flare_report_cwd --on-variable PWD
+    printf '\e]7;file://%s%s\a' (hostname) "$PWD"
+end
+```
+
 ## Repository
 
 - Homepage: <https://github.com/abhi152003/flare>

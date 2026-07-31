@@ -205,6 +205,26 @@ impl Processor {
         }
     }
 
+    fn restore_enabled(&self) -> bool {
+        self.config.session.restore && !self.cli_options.no_restore
+    }
+
+    fn save_all_sessions(&self) {
+        if !self.restore_enabled() {
+            return;
+        }
+        for window in self.windows.values() {
+            match window.collect_session() {
+                Some(state) => {
+                    if let Err(err) = crate::session::save(&state) {
+                        log::warn!("Failed to save session: {err}");
+                    }
+                },
+                None => log::debug!("Skipped session save: no usable root directory"),
+            }
+        }
+    }
+
     /// Check if an event is irrelevant and can be skipped.
     fn skip_window_event(event: &WindowEvent) -> bool {
         matches!(
@@ -235,11 +255,52 @@ impl ApplicationHandler<Event> for Processor {
             return;
         }
 
-        if let Some(window_options) = self.initial_window_options.take() {
-            if let Err(err) = self.create_initial_window(event_loop, window_options) {
-                self.initial_window_error = Some(err);
-                event_loop.exit();
-                return;
+        let mut window_options = match self.initial_window_options.take() {
+            Some(opts) => opts,
+            None => return,
+        };
+
+        // Pre-load the session so the initial pane can spawn in the saved CWD directly,
+        // avoiding an echoed `cd` command.
+        let saved_session = if self.restore_enabled() {
+            crate::session::most_recent()
+        } else {
+            None
+        };
+        if let Some(session) = &saved_session {
+            if let Some(cwd) = first_pane_cwd(session) {
+                window_options.terminal_options.working_directory = Some(cwd);
+            }
+        }
+
+        if let Err(err) = self.create_initial_window(event_loop, window_options) {
+            self.initial_window_error = Some(err);
+            event_loop.exit();
+            return;
+        }
+
+        // Replay the saved session's additional tabs/panes (the first pane is already spawned
+        // in the right directory above).
+        if let Some(session) = saved_session {
+            if let Some(window_id) = self.windows.keys().next().copied() {
+                if let Some(window) = self.windows.get_mut(&window_id) {
+                    window.restore_session(&session, &self.proxy);
+                }
+            }
+        }
+
+        // Schedule periodic session autosave as a crash-recovery safety net.
+        if self.restore_enabled() {
+            if let Some(window_id) = self.windows.keys().next().copied() {
+                let timer_id = TimerId::new(Topic::SessionSave, window_id);
+                if !self.scheduler.scheduled(timer_id) {
+                    self.scheduler.schedule(
+                        Event::new(EventType::SessionSave, window_id),
+                        Duration::from_secs(60),
+                        true,
+                        timer_id,
+                    );
+                }
             }
         }
 
@@ -426,6 +487,18 @@ impl ApplicationHandler<Event> for Processor {
                 }
             },
             (EventType::Terminal(TerminalEvent::Exit), Some(window_id)) => {
+                // Persist this window's session before it's torn down, since the window (and
+                // its cached CWDs) is dropped below.
+                if self.restore_enabled() {
+                    if let Some(window) = self.windows.get(window_id) {
+                        if let Some(state) = window.collect_session() {
+                            if let Err(err) = crate::session::save(&state) {
+                                log::warn!("Failed to save session: {err}");
+                            }
+                        }
+                    }
+                }
+
                 // Remove the closed terminal.
                 let window_context = match self.windows.entry(*window_id) {
                     // Don't exit when terminal exits if user asked to hold the window.
@@ -458,6 +531,9 @@ impl ApplicationHandler<Event> for Processor {
                         window_context.display.window.request_redraw();
                     }
                 }
+            },
+            (EventType::SessionSave, _) => {
+                self.save_all_sessions();
             },
             (payload, Some(window_id)) => {
                 if let Some(window_context) = self.windows.get_mut(window_id) {
@@ -505,6 +581,9 @@ impl ApplicationHandler<Event> for Processor {
             info!("Exiting the event loop");
         }
 
+        // Persist session state before any windows are torn down.
+        self.save_all_sessions();
+
         match self.gl_config.take().map(|config| config.display()) {
             #[cfg(not(target_os = "macos"))]
             Some(glutin::display::Display::Egl(display)) => {
@@ -524,6 +603,18 @@ impl ApplicationHandler<Event> for Processor {
         // SAFETY: The clipboard must be dropped before the event loop, so use the nop clipboard
         // as a safe placeholder.
         self.clipboard = Clipboard::new_nop();
+    }
+}
+
+/// Extract the first (leftmost) leaf CWD from a saved session, for spawning the initial pane.
+fn first_pane_cwd(session: &crate::session::SessionState) -> Option<std::path::PathBuf> {
+    let tab = session.tabs.first()?;
+    let mut node = &tab.root;
+    loop {
+        match node {
+            crate::session::PaneNodeState::Leaf { cwd } => return Some(cwd.clone()),
+            crate::session::PaneNodeState::Split { first, .. } => node = first,
+        }
     }
 }
 
@@ -567,6 +658,7 @@ pub enum EventType {
     #[cfg(unix)]
     Shutdown,
     Frame,
+    SessionSave,
 }
 
 impl From<TerminalEvent> for EventType {
@@ -715,6 +807,8 @@ pub struct ActionContext<'a, N, T> {
     #[cfg(not(windows))]
     pub shell_pid: u32,
     pub pending_tab_action: &'a mut Option<TabAction>,
+    pub palette_state: &'a mut crate::palette::PaletteState,
+    pub pending_session_restore: &'a mut Option<crate::session::SessionState>,
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionContext<'a, N, T> {
@@ -1577,6 +1671,27 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     fn switch_pane_down(&mut self) {
         *self.pending_tab_action = Some(TabAction::SwitchPaneDown);
     }
+
+    fn toggle_palette(&mut self) {
+        self.palette_state.toggle();
+        *self.dirty = true;
+        self.display.damage_tracker.frame().mark_fully_damaged();
+        self.display.damage_tracker.next_frame().mark_fully_damaged();
+    }
+
+    fn palette_active(&self) -> bool {
+        self.palette_state.is_open()
+    }
+
+    fn palette_state_mut(&mut self) -> Option<&mut crate::palette::PaletteState> {
+        Some(self.palette_state)
+    }
+
+    fn restore_session(&mut self, session: crate::session::SessionState) {
+        self.palette_state.close();
+        *self.pending_session_restore = Some(session);
+        *self.dirty = true;
+    }
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> ActionContext<'a, N, T> {
@@ -2008,13 +2123,16 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     TerminalEvent::MouseCursorDirty => self.reset_mouse_cursor(),
                     TerminalEvent::CursorBlinkingChange => self.ctx.update_cursor_blinking(),
                     TerminalEvent::Exit | TerminalEvent::ChildExit(_) | TerminalEvent::Wakeup => (),
+                    // CWD is already cached on the Term by set_cwd; nothing to do in the UI yet.
+                    TerminalEvent::Cwd(_) => (),
                 },
                 #[cfg(unix)]
                 EventType::IpcConfig(_) | EventType::IpcGetConfig(..) | EventType::Shutdown => (),
                 EventType::Message(_)
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)
-                | EventType::Frame => (),
+                | EventType::Frame
+                | EventType::SessionSave => (),
             },
             WinitEvent::WindowEvent { event, .. } => {
                 match event {
