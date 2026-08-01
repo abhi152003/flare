@@ -30,6 +30,8 @@ pub struct SessionState {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct TabState {
     pub root: PaneNodeState,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Serializable mirror of [`tab::PaneNode`], preserving the split tree.
@@ -120,8 +122,10 @@ pub fn collect<F>(root: PathBuf, tabs: &[tab::Tab], cwd_of: F) -> SessionState
 where
     F: Fn(&tab::Pane) -> Option<PathBuf>,
 {
-    let tab_states =
-        tabs.iter().map(|tab| TabState { root: collect_node(&tab.root, &cwd_of) }).collect();
+    let tab_states = tabs
+        .iter()
+        .map(|tab| TabState { root: collect_node(&tab.root, &cwd_of), name: tab.name.clone() })
+        .collect();
 
     SessionState { version: SESSION_FORMAT_VERSION, root, last_used: now_secs(), tabs: tab_states }
 }
@@ -187,7 +191,13 @@ pub fn save(state: &SessionState) -> Result<(), SessionError> {
         std::fs::create_dir_all(parent)?;
     }
     let serialized = toml::to_string_pretty(state)?;
-    std::fs::write(&path, serialized)?;
+
+    // Atomic write: write to a temp file in the same directory, then rename. A crash mid-write
+    // leaves the temp file (harmless) rather than a truncated session file.
+    let tmp_path = path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, &serialized)?;
+    std::fs::rename(&tmp_path, &path)?;
+
     log::debug!("Saved session for {} -> {}", state.root.display(), path.display());
     Ok(())
 }
@@ -375,8 +385,9 @@ mod tests {
                         leaf("/home/u/proj"),
                         split(SplitDirectionState::Vertical, leaf("/tmp"), leaf("/etc")),
                     ),
+                    name: None,
                 },
-                TabState { root: leaf("/home/u") },
+                TabState { root: leaf("/home/u"), name: None },
             ],
         };
 

@@ -2104,9 +2104,19 @@ impl Display {
     /// Draw the palette overlay centered over the terminal.
     fn draw_palette(&mut self, config: &UiConfig, palette: &crate::palette::PaletteState) {
         let size_info = self.size_info;
+        const MAX_VISIBLE_ROWS: usize = 10;
 
         let visible = palette.visible();
-        let rows = visible.len() + 2;
+        let total = visible.len();
+
+        // Compute the scroll window: keep the selection visible.
+        let max_scroll = total.saturating_sub(MAX_VISIBLE_ROWS);
+        let scroll_offset = palette.selected().saturating_sub(MAX_VISIBLE_ROWS / 2).min(max_scroll);
+        let end = (scroll_offset + MAX_VISIBLE_ROWS).min(total);
+        let shown_count = end - scroll_offset;
+
+        // +3 for title, query prompt, and footer.
+        let rows = shown_count + 3;
         let box_width = (size_info.width() * 0.6).max(360.0);
         let box_height = (rows as f32 * size_info.cell_height()) + 16.0;
         let box_x = (size_info.width() - box_width) / 2.0;
@@ -2118,40 +2128,46 @@ impl Display {
         let text_fg = config.colors.primary.foreground;
         let row_h = size_info.cell_height();
 
-        // Dimmed backdrop, popup container, and selected-row highlight.
-        let selected_y = box_y + 8.0 + row_h + (palette.selected() as f32 * row_h);
-        let rects = vec![
+        // Selected row Y (adjusted for scroll offset).
+        let selected_in_view = palette.selected() - scroll_offset;
+        let selected_y = box_y + 8.0 + row_h + (selected_in_view as f32 * row_h);
+
+        let mut rects = vec![
             RenderRect::new(0.0, 0.0, size_info.width(), size_info.height(), bg, 0.55),
             RenderRect::new(box_x, box_y, box_width, box_height, bg, 0.97),
             RenderRect::new(box_x + 6.0, selected_y, box_width - 12.0, row_h, accent, 0.35),
         ];
+
+        // Scrollbar indicator when the list overflows.
+        if total > MAX_VISIBLE_ROWS {
+            let track_x = box_x + box_width - 6.0;
+            let track_h = (shown_count as f32 * row_h).max(row_h);
+            let thumb_h = ((MAX_VISIBLE_ROWS as f32 / total as f32) * track_h).max(row_h * 0.4);
+            let track_top = box_y + 8.0 + row_h;
+            let thumb_y = track_top + (scroll_offset as f32 / total as f32) * track_h;
+            rects.push(RenderRect::new(track_x, track_top, 2.0, track_h, dim, 0.3));
+            rects.push(RenderRect::new(track_x, thumb_y, 2.0, thumb_h, accent, 0.6));
+        }
+
         self.renderer
             .draw_rects(&size_info, &self.glyph_cache.font_metrics(), rects);
 
-        // Text rows. draw_string places text at column 0 offset by padding_x/padding_y, so we
-        // synthesize a SizeInfo whose padding lands each row at the desired pixel.
         let cols = ((box_width - 20.0) / size_info.cell_width()) as usize;
-        self.draw_palette_row("Switch to directory  (Enter=open, Esc=close)", 0, dim, bg, box_x, box_y, row_h, cols, size_info);
+
+        // Title.
+        self.draw_palette_row("Switch to directory", 0, dim, bg, box_x, box_y, row_h, cols, size_info);
+        // Query.
         self.draw_palette_row(&format!("> {}", palette.query()), 1, text_fg, bg, box_x, box_y, row_h, cols, size_info);
 
         if visible.is_empty() {
-            self.draw_palette_row(
-                "No saved sessions yet — quit Flare to save this one",
-                2,
-                dim,
-                bg,
-                box_x,
-                box_y,
-                row_h,
-                cols,
-                size_info,
-            );
+            self.draw_palette_row("No saved sessions yet", 2, dim, bg, box_x, box_y, row_h, cols, size_info);
         } else {
-            for (i, (_, entry)) in visible.iter().enumerate() {
-                let fg = if i == palette.selected() { accent } else { text_fg };
+            for (view_i, abs_i) in (scroll_offset..end).enumerate() {
+                let (_, entry) = &visible[abs_i];
+                let fg = if abs_i == palette.selected() { accent } else { text_fg };
                 self.draw_palette_row(
-                    &shorten_path(&entry.root),
-                    i + 2,
+                    &crate::path_util::shorten_path(&entry.root),
+                    view_i + 2,
                     fg,
                     bg,
                     box_x,
@@ -2163,7 +2179,10 @@ impl Display {
             }
         }
 
-        // Damage so the overlay repaints even when the grid is idle.
+        // Footer keymap hints.
+        let footer_row = shown_count + 2;
+        self.draw_palette_row("↑↓ navigate · Enter open · Esc close", footer_row, dim, bg, box_x, box_y, row_h, cols, size_info);
+
         self.damage_tracker.frame().mark_fully_damaged();
         self.damage_tracker.next_frame().mark_fully_damaged();
     }
@@ -2191,7 +2210,13 @@ impl Display {
             false,
             0.0,
         );
-        let truncated: String = text.chars().take(cols).collect();
+        let truncated: String = if text.chars().count() > cols {
+            let mut s: String = text.chars().take(cols.saturating_sub(1)).collect();
+            s.push('…');
+            s
+        } else {
+            text.to_string()
+        };
         self.renderer.draw_string(
             Point::new(0usize, Column(0)),
             fg,
@@ -2508,29 +2533,4 @@ fn window_size(
     let height = (padding.1).mul_add(2., grid_height).floor();
 
     PhysicalSize::new(width as u32, height as u32)
-}
-
-/// Compact a path for display: replace the home prefix with `~`, and if still long keep only the
-/// last few segments.
-fn shorten_path(path: &std::path::Path) -> String {
-    use std::path::Path;
-
-    let s = match home::home_dir() {
-        Some(home) if path.starts_with(&home) => {
-            format!("~/{}", path.strip_prefix(&home).unwrap_or(Path::new("")).display())
-        },
-        _ => path.display().to_string(),
-    };
-
-    const MAX_LEN: usize = 40;
-    if s.len() <= MAX_LEN {
-        return s;
-    }
-
-    let segments: Vec<&str> = s.split('/').filter(|p| !p.is_empty()).collect();
-    if segments.len() <= 3 {
-        return s;
-    }
-    let tail = segments[segments.len() - 3..].join("/");
-    format!("…/{}", tail)
 }

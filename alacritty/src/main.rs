@@ -44,6 +44,7 @@ mod palette;
 mod panic;
 #[cfg(unix)]
 mod polling;
+mod path_util;
 mod renderer;
 mod scheduler;
 mod session;

@@ -311,7 +311,7 @@ pub struct Term<T> {
     event_proxy: T,
 
     /// Current title of the window.
-    title: Option<String>,
+    pub title: Option<String>,
 
     /// Working directory last reported by the shell via OSC 7, if any.
     pub cwd: Option<PathBuf>,

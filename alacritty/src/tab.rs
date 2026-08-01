@@ -362,6 +362,7 @@ impl fmt::Debug for Pane {
 /// A single tab containing a tree of panes.
 pub struct Tab {
     pub root: PaneNode,
+    pub name: Option<String>,
 }
 
 impl Tab {

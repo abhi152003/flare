@@ -250,7 +250,7 @@ impl WindowContext {
             #[cfg(not(windows))]
             shell_pid,
         };
-        let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane) };
+        let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane), name: None };
         let mut tab_manager = TabManager::new();
         tab_manager.add_tab(initial_tab);
 
@@ -544,7 +544,7 @@ impl WindowContext {
                 .tabs()
                 .iter()
                 .enumerate()
-                .map(|(index, _tab)| tab::Tab::auto_title(index))
+                .map(|(index, tab)| self.smart_tab_title(tab, index))
                 .collect();
             Some((titles, self.tab_manager.active_tab_index()))
         } else {
@@ -886,7 +886,7 @@ impl WindowContext {
             shell_pid,
         };
 
-        let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane) };
+        let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane), name: None };
 
         // Store the new tab's terminal state for later activation.
         self.tab_manager.add_tab(new_tab);
@@ -1037,6 +1037,33 @@ impl WindowContext {
         }
     }
 
+    fn smart_tab_title(&self, tab: &tab::Tab, index: usize) -> String {
+        // 1. Explicit user-set name wins.
+        if let Some(name) = &tab.name {
+            if !name.trim().is_empty() {
+                return name.clone();
+            }
+        }
+        // 2. Shell-reported title (OSC 0/2).
+        let pane = tab.active_pane();
+        let term = pane.terminal.lock();
+        if let Some(title) = term.title.as_ref() {
+            if !title.trim().is_empty() {
+                return title.clone();
+            }
+        }
+        // 3. Shortened CWD (OSC 7 reported or /proc).
+        if let Some(cwd) = term.cwd.clone() {
+            return crate::path_util::shorten_path(&cwd);
+        }
+        drop(term);
+        if let Some(cwd) = self.pane_cwd(pane) {
+            return crate::path_util::shorten_path(&cwd);
+        }
+        // 4. Fallback.
+        tab::Tab::auto_title(index)
+    }
+
     fn pane_cwd(&self, pane: &tab::Pane) -> Option<PathBuf> {
         // Prefer the CWD the shell reported via OSC 7 (always accurate, even at exit time).
         if let Some(cwd) = pane.terminal.lock().cwd.clone() {
@@ -1099,10 +1126,14 @@ impl WindowContext {
             created += 1;
         }
 
+        // Apply the first tab's saved name.
+        self.tab_manager.active_tab_mut().name = first_tab.name.clone();
+
         for tab_state in tabs {
             let tab_leaves = first_tab_leaves(&tab_state.root);
             let first_cwd = tab_leaves.first().cloned();
             self.create_new_tab_with_cwd(proxy, sanitize_cwd(first_cwd.as_deref()));
+            self.tab_manager.active_tab_mut().name = tab_state.name.clone();
 
             for cwd in tab_leaves.iter().skip(1) {
                 if created >= MAX_PANES {
