@@ -74,6 +74,8 @@ pub struct WindowContext {
     tab_manager: TabManager,
     close_button_hovered: bool,
     palette_state: crate::palette::PaletteState,
+    /// Active pane-border drag, if the left button went down on a split border.
+    pane_drag: Option<tab::PaneDrag>,
 }
 
 impl WindowContext {
@@ -281,6 +283,7 @@ impl WindowContext {
             tab_manager,
             close_button_hovered: false,
             palette_state: Default::default(),
+            pane_drag: None,
         })
     }
 
@@ -486,6 +489,70 @@ impl WindowContext {
         focused
     }
 
+    /// If the cursor is on a split border, begin a pane-border drag and return
+    /// `true` (the press is consumed by the drag). Reads `self.mouse` for the press
+    /// position — `CursorMoved` precedes `MouseInput`, so it is current.
+    fn maybe_start_pane_drag(&mut self) -> bool {
+        if self.pane_drag.is_some() || !self.tab_manager.active_tab().is_split() {
+            return false;
+        }
+        let viewport = self.full_pane_viewport();
+        let x = self.mouse.x as f32;
+        let y = self.mouse.y as f32;
+        let hit = self
+            .tab_manager
+            .active_tab()
+            .root
+            .border_at_point(viewport, x, y, tab::SPLIT_GAP);
+        if let Some(drag) = hit {
+            self.pane_drag = Some(drag);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Apply an in-progress drag: recompute the grabbed split's ratio from the
+    /// cursor position so the divider tracks the pointer. Clamps to [0.1, 0.9].
+    fn update_pane_drag(&mut self, x: f32, y: f32) {
+        let Some(drag) = self.pane_drag.clone() else { return };
+        self.tab_manager.active_tab_mut().root.set_ratio_at(&drag, x, y);
+        self.display.pending_update.dirty = true;
+        self.dirty = true;
+    }
+
+    /// The cursor the window should show over / during a border drag on `drag`.
+    /// A junction (two perpendicular borders) shows a 4-way move cursor; a single
+    /// border shows the axis-appropriate resize arrow.
+    fn drag_cursor(drag: &tab::PaneDrag) -> CursorIcon {
+        if drag.is_junction() {
+            CursorIcon::AllScroll
+        } else {
+            match drag.single_direction() {
+                Some(tab::SplitDirection::Horizontal) => CursorIcon::ColResize,
+                Some(tab::SplitDirection::Vertical) => CursorIcon::RowResize,
+                None => CursorIcon::Default,
+            }
+        }
+    }
+
+    /// If the pointer is over a split border (but not dragging), return the resize
+    /// cursor for it so the border is discoverable.
+    fn hover_border_cursor(&self) -> Option<CursorIcon> {
+        if self.pane_drag.is_some() || !self.tab_manager.active_tab().is_split() {
+            return None;
+        }
+        let viewport = self.full_pane_viewport();
+        let x = self.mouse.x as f32;
+        let y = self.mouse.y as f32;
+        self.tab_manager
+            .active_tab()
+            .root
+            .border_at_point(viewport, x, y, tab::SPLIT_GAP)
+            .as_ref()
+            .map(Self::drag_cursor)
+    }
+
     fn borderless_resize_direction(&self) -> Option<ResizeDirection> {
         if self.config.window.decorations != Decorations::None {
             return None;
@@ -623,6 +690,48 @@ impl WindowContext {
             }
         }
 
+        // Pane-border drag: while dragging, cursor moves resize the grabbed split
+        // and left-release ends the drag. Intercepted here (before queueing) because
+        // the input processor has no &mut access to the pane tree.
+        if self.pane_drag.is_some() {
+            if let WinitEvent::WindowEvent {
+                event: WindowEvent::CursorMoved { position, .. },
+                ..
+            } = &event
+            {
+                let size_info = self.display.size_info;
+                let x = position.x as f32 - size_info.padding_x();
+                let y = position.y as f32 - size_info.padding_y() - size_info.tab_bar_offset_y();
+                self.update_pane_drag(x, y);
+                // Keep the resize cursor during the drag.
+                let icon = self
+                    .pane_drag
+                    .as_ref()
+                    .map(Self::drag_cursor)
+                    .unwrap_or(CursorIcon::Text);
+                self.display.window.set_mouse_cursor(icon);
+                // We return early (skip queueing), so request the redraw ourselves —
+                // otherwise the dirty flag set in update_pane_drag never draws.
+                if self.display.window.has_frame && !self.occluded {
+                    self.display.window.request_redraw();
+                }
+                return;
+            }
+            if let WinitEvent::WindowEvent {
+                event:
+                    WindowEvent::MouseInput {
+                        state: ElementState::Released,
+                        button: winit::event::MouseButton::Left,
+                        ..
+                    },
+                ..
+            } = &event
+            {
+                self.pane_drag = None;
+                return;
+            }
+        }
+
         if let WinitEvent::WindowEvent {
             event:
                 WindowEvent::MouseInput {
@@ -633,6 +742,10 @@ impl WindowContext {
             ..
         } = &event
         {
+            // A press on a split border starts a drag instead of focusing a pane.
+            if self.maybe_start_pane_drag() {
+                return;
+            }
             if self.tab_manager.active_tab().is_split() {
                 self.focus_pane_at_mouse(event_proxy);
             }
@@ -772,9 +885,12 @@ impl WindowContext {
             self.mouse.hint_highlight_dirty = false;
         }
 
-        // Set cursor to pointer when hovering over the close button (after hint processing
-        // which may reset the cursor).
-        if let Some(direction) = self.borderless_resize_direction() {
+        // Cursor feedback: resize icon when hovering a split border (discoverable
+        // borders), pointer over the close button in borderless mode. Hints may have
+        // reset the cursor, so this runs last.
+        if let Some(icon) = self.hover_border_cursor() {
+            self.display.window.set_mouse_cursor(icon);
+        } else if let Some(direction) = self.borderless_resize_direction() {
             self.display.window.set_mouse_cursor(direction.into());
         } else if self.config.window.decorations == Decorations::None && self.close_button_hovered {
             self.display.window.set_mouse_cursor(CursorIcon::Pointer);
@@ -976,7 +1092,9 @@ impl WindowContext {
             None => return,
         };
 
-        self.tab_manager.active_tab_mut().root.split_active(direction, new_pane);
+        // Compute the viewport before borrowing the tab mutably.
+        let viewport = self.full_pane_viewport();
+        self.tab_manager.active_tab_mut().root.split(direction, new_pane, viewport);
 
         self.activate_current_pane(proxy);
     }
@@ -1240,7 +1358,9 @@ impl WindowContext {
             Some(pane) => pane,
             None => return,
         };
-        self.tab_manager.active_tab_mut().root.split_active(direction, new_pane);
+        // Compute the viewport before borrowing the tab mutably.
+        let viewport = self.full_pane_viewport();
+        self.tab_manager.active_tab_mut().root.split(direction, new_pane, viewport);
         self.activate_current_pane(proxy);
     }
 
@@ -1347,6 +1467,32 @@ impl WindowContext {
                 let tab = self.tab_manager.active_tab_mut();
                 if tab.focus_adjacent_pane(tab::SplitDirection::Vertical, false, full_viewport) {
                     self.activate_current_pane(proxy);
+                }
+            },
+            TabAction::ResizePaneLeft
+            | TabAction::ResizePaneRight
+            | TabAction::ResizePaneUp
+            | TabAction::ResizePaneDown => {
+                // Axis mapping (mirrors the split inversion): left/right resize a
+                // Horizontal split (panes side by side); up/down a Vertical one
+                // (panes stacked). Sign: growing `first`'s share moves the border
+                // right/down; shrinking it moves the border left/up.
+                let (axis, grow_first): (tab::SplitDirection, bool) = match action {
+                    TabAction::ResizePaneLeft => (tab::SplitDirection::Horizontal, false),
+                    TabAction::ResizePaneRight => (tab::SplitDirection::Horizontal, true),
+                    TabAction::ResizePaneUp => (tab::SplitDirection::Vertical, false),
+                    TabAction::ResizePaneDown => (tab::SplitDirection::Vertical, true),
+                    // Unreachable: the guard above covers all four variants.
+                    _ => return,
+                };
+                let delta = if grow_first { 0.05 } else { -0.05 };
+
+                // Compute the viewport before borrowing the tab mutably.
+                let viewport = self.full_pane_viewport();
+                let tab = self.tab_manager.active_tab_mut();
+                if !tab.zoomed && tab.root.resize_active(axis, delta, viewport) {
+                    self.display.pending_update.dirty = true;
+                    self.dirty = true;
                 }
             },
             TabAction::TogglePaneZoom => {

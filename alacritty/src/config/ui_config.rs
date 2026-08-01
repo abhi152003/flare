@@ -171,6 +171,7 @@ impl UiConfig {
                     inactive_color: rgb(0x41, 0x49, 0x68),
                     text_color: rgb(0xc0, 0xca, 0xf5),
                     height: 36,
+                    ..Default::default()
                 };
             },
             ThemePreset::CatppuccinMocha => {
@@ -208,6 +209,7 @@ impl UiConfig {
                     inactive_color: rgb(0x45, 0x47, 0x5a),
                     text_color: rgb(0xcd, 0xd6, 0xf4),
                     height: 36,
+                    ..Default::default()
                 };
             },
             ThemePreset::Nord => {
@@ -245,6 +247,7 @@ impl UiConfig {
                     inactive_color: rgb(0x4c, 0x56, 0x6a),
                     text_color: rgb(0xd8, 0xde, 0xe9),
                     height: 36,
+                    ..Default::default()
                 };
             },
             ThemePreset::Dracula => {
@@ -282,6 +285,7 @@ impl UiConfig {
                     inactive_color: rgb(0x44, 0x47, 0x5a),
                     text_color: rgb(0xf8, 0xf8, 0xf2),
                     height: 36,
+                    ..Default::default()
                 };
             },
             ThemePreset::OneDark => {
@@ -319,6 +323,7 @@ impl UiConfig {
                     inactive_color: rgb(0x3e, 0x44, 0x51),
                     text_color: rgb(0xab, 0xb2, 0xbf),
                     height: 36,
+                    ..Default::default()
                 };
             },
         }

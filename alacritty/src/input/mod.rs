@@ -160,6 +160,11 @@ pub trait ActionContext<T: EventListener> {
     fn switch_pane_up(&mut self) {}
     fn switch_pane_down(&mut self) {}
 
+    fn resize_pane_left(&mut self) {}
+    fn resize_pane_right(&mut self) {}
+    fn resize_pane_up(&mut self) {}
+    fn resize_pane_down(&mut self) {}
+
     fn toggle_palette(&mut self) {}
     fn palette_active(&self) -> bool { false }
     fn palette_state_mut(&mut self) -> Option<&mut crate::palette::PaletteState> { None }
@@ -476,6 +481,10 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SwitchPaneRight => ctx.switch_pane_right(),
             Action::SwitchPaneUp => ctx.switch_pane_up(),
             Action::SwitchPaneDown => ctx.switch_pane_down(),
+            Action::ResizePaneLeft => ctx.resize_pane_left(),
+            Action::ResizePaneRight => ctx.resize_pane_right(),
+            Action::ResizePaneUp => ctx.resize_pane_up(),
+            Action::ResizePaneDown => ctx.resize_pane_down(),
             Action::TogglePalette => ctx.toggle_palette(),
             Action::TogglePaneZoom => ctx.toggle_pane_zoom(),
             _ => (),

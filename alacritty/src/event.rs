@@ -800,6 +800,10 @@ pub enum TabAction {
     SwitchPaneRight,
     SwitchPaneUp,
     SwitchPaneDown,
+    ResizePaneLeft,
+    ResizePaneRight,
+    ResizePaneUp,
+    ResizePaneDown,
     TogglePaneZoom,
 }
 
@@ -1693,6 +1697,22 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn switch_pane_down(&mut self) {
         *self.pending_tab_action = Some(TabAction::SwitchPaneDown);
+    }
+
+    fn resize_pane_left(&mut self) {
+        *self.pending_tab_action = Some(TabAction::ResizePaneLeft);
+    }
+
+    fn resize_pane_right(&mut self) {
+        *self.pending_tab_action = Some(TabAction::ResizePaneRight);
+    }
+
+    fn resize_pane_up(&mut self) {
+        *self.pending_tab_action = Some(TabAction::ResizePaneUp);
+    }
+
+    fn resize_pane_down(&mut self) {
+        *self.pending_tab_action = Some(TabAction::ResizePaneDown);
     }
 
     fn toggle_pane_zoom(&mut self) {

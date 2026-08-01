@@ -1497,8 +1497,18 @@ impl Display {
                 let _sampler = self.meter.sampler();
                 let glyph_cache = &mut self.glyph_cache;
 
-                let cells = grid_cells.into_iter().map(|cell| {
+                // Dim text in inactive panes (#21). 1.0 leaves the active pane untouched.
+                let dim = if is_active {
+                    1.0
+                } else {
+                    config.window.tab_bar.inactive_pane_dim.clamp(0.0, 1.0)
+                };
+                let cells = grid_cells.into_iter().map(|mut cell| {
                     lines.update(&cell);
+                    if dim < 1.0 {
+                        cell.fg = cell.fg * dim;
+                        cell.bg = cell.bg * dim;
+                    }
                     cell
                 });
                 self.renderer.draw_cells(&pane_size_info, glyph_cache, cells);

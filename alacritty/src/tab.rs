@@ -48,6 +48,82 @@ impl PaneViewport {
     }
 }
 
+/// Pixels of empty space between adjacent panes. This gap is the draggable border.
+pub const SPLIT_GAP: f32 = 2.0;
+
+/// One grabbable border (a single split's dividing line).
+#[derive(Clone)]
+struct BorderTarget {
+    /// Path to the Split node: `false` = first child, `true` = second.
+    path: Vec<bool>,
+    /// Axis of the split (Horizontal ↔ left/right, Vertical ↔ up/down).
+    direction: SplitDirection,
+    /// Viewport the split occupies (origin/extent for the ratio math).
+    viewport: PaneViewport,
+}
+
+/// An in-progress pane-border drag. Holds one target for a plain border, or two
+/// (one per axis) when the press landed on a junction where perpendicular borders
+/// meet — dragging then moves both, resizing the whole corner in one motion.
+#[derive(Clone)]
+pub struct PaneDrag {
+    targets: Vec<BorderTarget>,
+}
+
+impl PaneDrag {
+    /// `true` when two perpendicular borders are grabbed (a junction/corner).
+    pub fn is_junction(&self) -> bool {
+        self.targets.len() >= 2
+    }
+
+    /// The single border's axis, when exactly one target is grabbed.
+    pub fn single_direction(&self) -> Option<SplitDirection> {
+        match self.targets.as_slice() {
+            [t] => Some(t.direction),
+            _ => None,
+        }
+    }
+}
+
+/// Split `viewport` into first/second child regions along `direction` at `ratio`.
+///
+/// Shared by the layout walker ([`PaneNode::collect_viewports`]) and the BSP split
+/// logic so both use identical geometry.
+fn split_viewport(
+    viewport: PaneViewport,
+    direction: SplitDirection,
+    ratio: f32,
+) -> (PaneViewport, PaneViewport) {
+    let available = match direction {
+        SplitDirection::Horizontal => viewport.width - SPLIT_GAP,
+        SplitDirection::Vertical => viewport.height - SPLIT_GAP,
+    };
+
+    let first_size = available * ratio;
+    let second_size = available * (1.0 - ratio);
+
+    match direction {
+        SplitDirection::Horizontal => (
+            PaneViewport::new(viewport.x, viewport.y, first_size, viewport.height),
+            PaneViewport::new(
+                viewport.x + first_size + SPLIT_GAP,
+                viewport.y,
+                second_size,
+                viewport.height,
+            ),
+        ),
+        SplitDirection::Vertical => (
+            PaneViewport::new(viewport.x, viewport.y, viewport.width, first_size),
+            PaneViewport::new(
+                viewport.x,
+                viewport.y + first_size + SPLIT_GAP,
+                viewport.width,
+                second_size,
+            ),
+        ),
+    }
+}
+
 impl PaneNode {
     /// Get the currently active pane (traverses to the leftmost/deepest leaf).
     pub fn active_pane(&self) -> &Pane {
@@ -103,10 +179,15 @@ impl PaneNode {
         matches!(self, PaneNode::Leaf(_))
     }
 
-    /// Split the active pane, inserting `new_pane` on one side.
+    /// Split the largest leaf in this subtree, inserting `new_pane` on one side.
     ///
-    /// The existing active pane stays as `first`, and the new pane becomes `second`.
-    pub fn split_active(&mut self, direction: SplitDirection, new_pane: Pane) {
+    /// Uses binary-space-partitioning: the largest remaining region is halved so
+    /// panes stay balanced as the tree grows, regardless of which pane is focused.
+    /// `viewport` is the region occupied by this node.
+    ///
+    /// `new_pane` is expected to arrive as the active pane; the previously active
+    /// leaf is cleared so the new pane becomes the sole active leaf.
+    pub fn split(&mut self, direction: SplitDirection, new_pane: Pane, viewport: PaneViewport) {
         match self {
             PaneNode::Leaf(pane) => {
                 let existing = Pane {
@@ -127,16 +208,19 @@ impl PaneNode {
                 };
             },
             PaneNode::Split { direction: split_direction, ratio, first, second } => {
-                if first.has_active() {
-                    first.split_active(direction, new_pane);
-                } else if second.has_active() {
-                    second.split_active(direction, new_pane);
+                let (first_viewport, second_viewport) =
+                    split_viewport(viewport, *split_direction, *ratio);
+
+                // Recurse into the child whose subtree holds the largest leaf — the
+                // defining BSP rule (split the biggest region first).
+                if first.max_leaf_area(first_viewport) >= second.max_leaf_area(second_viewport) {
+                    first.split(direction, new_pane, first_viewport);
                 } else {
-                    first.split_active(direction, new_pane);
+                    second.split(direction, new_pane, second_viewport);
                 }
 
                 // Rebalance repeated splits in the same direction so panes share the
-                // full tab area instead of only subdividing the most recently active pane.
+                // full tab area instead of only subdividing a single subtree.
                 if *split_direction == direction {
                     let first_count = first.pane_count() as f32;
                     let second_count = second.pane_count() as f32;
@@ -146,7 +230,253 @@ impl PaneNode {
         }
     }
 
-    /// Try to close the active pane. Returns the removed pane if successful.
+    /// Largest leaf area beneath this node, given the region it occupies.
+    ///
+    /// Used by [`split`](Self::split) to pick the subtree to subdivide.
+    fn max_leaf_area(&self, viewport: PaneViewport) -> f32 {
+        match self {
+            PaneNode::Leaf(_) => viewport.width * viewport.height,
+            PaneNode::Split { direction, ratio, first, second } => {
+                let (first_viewport, second_viewport) = split_viewport(viewport, *direction, *ratio);
+                first.max_leaf_area(first_viewport).max(second.max_leaf_area(second_viewport))
+            },
+        }
+    }
+
+    /// Resize the border nearest the active pane that lies on the requested axis.
+    ///
+    /// Walks down the path containing the active pane. The **innermost** split whose
+    /// direction matches `direction` is the one resized (a single border moves);
+    /// once it is adjusted the walk stops, so ancestor borders are left alone. A
+    /// non-matching split is descended but not mutated.
+    ///
+    /// `delta_ratio > 0` grows the `first` child's share, i.e. moves the border away
+    /// from `first`'s origin (right for a horizontal split, down for a vertical one).
+    /// The ratio is clamped to `[0.1, 0.9]` so no pane collapses.
+    /// Returns `true` if a ratio was changed.
+    pub fn resize_active(
+        &mut self,
+        direction: SplitDirection,
+        delta_ratio: f32,
+        viewport: PaneViewport,
+    ) -> bool {
+        match self {
+            PaneNode::Leaf(_) => false,
+            PaneNode::Split { direction: split_dir, ratio, first, second } => {
+                let (first_viewport, second_viewport) =
+                    split_viewport(viewport, *split_dir, *ratio);
+
+                if first.has_active() {
+                    if *split_dir == direction {
+                        // This is the nearest border on the requested axis.
+                        let clamped = (*ratio + delta_ratio).clamp(0.1, 0.9);
+                        if (clamped - *ratio).abs() > f32::EPSILON {
+                            *ratio = clamped;
+                            return true;
+                        }
+                        return false;
+                    }
+                    first.resize_active(direction, delta_ratio, first_viewport)
+                } else if second.has_active() {
+                    if *split_dir == direction {
+                        let clamped = (*ratio + delta_ratio).clamp(0.1, 0.9);
+                        if (clamped - *ratio).abs() > f32::EPSILON {
+                            *ratio = clamped;
+                            return true;
+                        }
+                        return false;
+                    }
+                    second.resize_active(direction, delta_ratio, second_viewport)
+                } else {
+                    false
+                }
+            },
+        }
+    }
+
+    /// Radius around a pane-border junction (where perpendicular borders cross)
+    /// within which the corner is grabbable. Wider than the plain per-axis tolerance
+    /// so junctions are easy to land on without making border segments feel sticky.
+    const JUNCTION_RADIUS: f32 = 6.0;
+
+    /// Collect every split border near `(x, y)` into `out`. A border is a hit when
+    /// the cursor is within `tolerance` on the border's own axis, OR within
+    /// [`JUNCTION_RADIUS`](Self::JUNCTION_RADIUS) on its axis while also within that
+    /// radius on the perpendicular axis — the latter widens the grab zone only at
+    /// junctions, so corners are easy to grab but plain segments stay tight.
+    fn borders_at_point(
+        &self,
+        viewport: PaneViewport,
+        x: f32,
+        y: f32,
+        tolerance: f32,
+        out: &mut Vec<BorderTarget>,
+    ) {
+        match self {
+            PaneNode::Leaf(_) => {},
+            PaneNode::Split { direction, ratio, first, second } => {
+                let (first_vp, second_vp) = split_viewport(viewport, *direction, *ratio);
+
+                // The dividing line sits at the end of the first child's region,
+                // centered in the gap. `along` is the cursor's position on the border's
+                // own axis; `across` is its position on the perpendicular axis.
+                let (border_pos, along, cross_lo, cross_hi, across) = match direction {
+                    SplitDirection::Horizontal => {
+                        let border = first_vp.x + first_vp.width + SPLIT_GAP / 2.0;
+                        (border, x, viewport.y, viewport.y + viewport.height, y)
+                    },
+                    SplitDirection::Vertical => {
+                        let border = first_vp.y + first_vp.height + SPLIT_GAP / 2.0;
+                        (border, y, viewport.x, viewport.x + viewport.width, x)
+                    },
+                };
+
+                let in_cross_bounds = cross_lo <= across && across <= cross_hi;
+                let along_dist = (along - border_pos).abs();
+                // Tight hit on this border, OR a near-junction hit: close on this
+                // border's axis *and* a perpendicular border also passes nearby — the
+                // latter widens the grab zone only at true junctions.
+                let on_this = in_cross_bounds
+                    && (along_dist <= tolerance
+                        || (along_dist <= Self::JUNCTION_RADIUS
+                            && Self::has_crossing_border(
+                                self,
+                                viewport,
+                                *direction,
+                                border_pos,
+                                x,
+                                y,
+                            )));
+                if on_this {
+                    out.push(BorderTarget { path: Vec::new(), direction: *direction, viewport });
+                }
+
+                // Descend into the child containing the point, prefixing its targets'
+                // paths so they resolve relative to this node.
+                let inner = if first_vp.contains(x, y) {
+                    let mut sub = Vec::new();
+                    first.borders_at_point(first_vp, x, y, tolerance, &mut sub);
+                    Some((false, sub))
+                } else if second_vp.contains(x, y) {
+                    let mut sub = Vec::new();
+                    second.borders_at_point(second_vp, x, y, tolerance, &mut sub);
+                    Some((true, sub))
+                } else {
+                    None
+                };
+                if let Some((went_second, sub)) = inner {
+                    for mut t in sub {
+                        t.path.insert(0, went_second);
+                        out.push(t);
+                    }
+                }
+            },
+        }
+    }
+
+    /// Does a perpendicular border cross the line `axis == border_pos` within
+    /// [`JUNCTION_RADIUS`](Self::JUNCTION_RADIUS) of `(x, y)`? Used to widen the
+    /// grab zone only where borders actually meet (a true junction).
+    fn has_crossing_border(
+        &self,
+        viewport: PaneViewport,
+        my_direction: SplitDirection,
+        my_border_pos: f32,
+        x: f32,
+        y: f32,
+    ) -> bool {
+        match self {
+            PaneNode::Leaf(_) => false,
+            PaneNode::Split { direction, ratio, first, second } => {
+                let (first_vp, second_vp) = split_viewport(viewport, *direction, *ratio);
+                // A perpendicular split crosses our border if its dividing line is
+                // within JUNCTION_RADIUS of the cursor on the perpendicular axis.
+                let (perp_border, perp_cursor) = match direction {
+                    SplitDirection::Horizontal => (first_vp.x + first_vp.width + SPLIT_GAP / 2.0, x),
+                    SplitDirection::Vertical => (first_vp.y + first_vp.height + SPLIT_GAP / 2.0, y),
+                };
+                let crosses = *direction != my_direction
+                    && (perp_cursor - perp_border).abs() <= Self::JUNCTION_RADIUS
+                    && (match my_direction {
+                        SplitDirection::Horizontal => y,
+                        SplitDirection::Vertical => x,
+                    } - my_border_pos).abs() <= Self::JUNCTION_RADIUS
+                    && viewport.contains(x, y);
+                if crosses {
+                    return true;
+                }
+                first.has_crossing_border(first_vp, my_direction, my_border_pos, x, y)
+                    || second.has_crossing_border(second_vp, my_direction, my_border_pos, x, y)
+            },
+        }
+    }
+
+    /// If `(x, y)` lies on one or more split borders, return a [`PaneDrag`] for
+    /// them. A junction (two perpendicular borders) yields a drag that moves both.
+    /// Returns `None` for a single leaf (e.g. a zoomed tab).
+    pub fn border_at_point(
+        &self,
+        viewport: PaneViewport,
+        x: f32,
+        y: f32,
+        tolerance: f32,
+    ) -> Option<PaneDrag> {
+        let mut targets = Vec::new();
+        self.borders_at_point(viewport, x, y, tolerance, &mut targets);
+        // Keep at most one target per axis: a junction has exactly one Horizontal
+        // and one Vertical border. If duplicates on an axis exist (nested same-axis
+        // splits), prefer the innermost (deepest path) — it's the closest border.
+        let mut by_axis: [Option<BorderTarget>; 2] = [None, None];
+        for t in targets {
+            let i = match t.direction {
+                SplitDirection::Horizontal => 0,
+                SplitDirection::Vertical => 1,
+            };
+            by_axis[i] = Some(match by_axis[i].take() {
+                // Deepest path (most segments) wins → nearest border.
+                Some(existing) if existing.path.len() >= t.path.len() => existing,
+                _ => t,
+            });
+        }
+        let kept: Vec<_> = by_axis.into_iter().flatten().collect();
+        (!kept.is_empty()).then(|| PaneDrag { targets: kept })
+    }
+
+    /// Apply an in-progress drag: recompute the ratio of every grabbed split from
+    /// the cursor position so each divider tracks the pointer. A horizontal split's
+    /// ratio comes from `x`, a vertical split's from `y`; the two are independent so
+    /// a junction drag moves both axes at once. Clamped to `[0.1, 0.9]`.
+    pub fn set_ratio_at(&mut self, drag: &PaneDrag, x: f32, y: f32) {
+        for target in &drag.targets {
+            self.set_one_ratio(target, x, y);
+        }
+    }
+
+    /// Recurse to the split at `target.path` and set its ratio from the cursor.
+    fn set_one_ratio(&mut self, target: &BorderTarget, x: f32, y: f32) {
+        match self {
+            PaneNode::Leaf(_) => {},
+            PaneNode::Split { ratio, first, second, .. } => {
+                if target.path.is_empty() {
+                    let (origin, extent, cursor) = match target.direction {
+                        SplitDirection::Horizontal => (target.viewport.x, target.viewport.width, x),
+                        SplitDirection::Vertical => (target.viewport.y, target.viewport.height, y),
+                    };
+                    let denom = (extent - SPLIT_GAP).max(1.0);
+                    *ratio = ((cursor - origin) / denom).clamp(0.1, 0.9);
+                } else {
+                    let go_second = target.path[0];
+                    let mut sub = target.clone();
+                    sub.path.remove(0);
+                    if go_second {
+                        second.set_one_ratio(&sub, x, y);
+                    } else {
+                        first.set_one_ratio(&sub, x, y);
+                    }
+                }
+            },
+        }
+    }
     ///
     /// If only one pane remains, returns `None` (the last pane cannot be closed).
     pub fn close_active(&mut self) -> Option<Pane> {
@@ -319,36 +649,7 @@ impl PaneNode {
                 result.push((viewport, pane));
             },
             PaneNode::Split { direction, ratio, first, second } => {
-                let split_gap = 2.0; // pixels between panes
-                let available = match direction {
-                    SplitDirection::Horizontal => viewport.width - split_gap,
-                    SplitDirection::Vertical => viewport.height - split_gap,
-                };
-
-                let first_size = available * ratio;
-                let second_size = available * (1.0 - ratio);
-
-                let (first_viewport, second_viewport) = match direction {
-                    SplitDirection::Horizontal => (
-                        PaneViewport::new(viewport.x, viewport.y, first_size, viewport.height),
-                        PaneViewport::new(
-                            viewport.x + first_size + split_gap,
-                            viewport.y,
-                            second_size,
-                            viewport.height,
-                        ),
-                    ),
-                    SplitDirection::Vertical => (
-                        PaneViewport::new(viewport.x, viewport.y, viewport.width, first_size),
-                        PaneViewport::new(
-                            viewport.x,
-                            viewport.y + first_size + split_gap,
-                            viewport.width,
-                            second_size,
-                        ),
-                    ),
-                };
-
+                let (first_viewport, second_viewport) = split_viewport(viewport, *direction, *ratio);
                 first.collect_viewports(first_viewport, result);
                 second.collect_viewports(second_viewport, result);
             },
@@ -575,5 +876,145 @@ impl TabManager {
 impl Default for TabManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two panes must tile the viewport exactly (both sizes sum to the available
+    /// space, accounting for the gap), with no overlap and the second offset past
+    /// the first plus the gap.
+    #[test]
+    fn split_viewport_halves_along_direction() {
+        let vp = PaneViewport::new(10.0, 20.0, 100.0, 60.0);
+
+        // Horizontal split at 0.5 → divides width, preserves height.
+        let (first, second) = split_viewport(vp, SplitDirection::Horizontal, 0.5);
+        assert_eq!(first.width, 49.0); // (100 - 2) * 0.5
+        assert_eq!(second.width, 49.0);
+        assert_eq!(first.height, 60.0);
+        assert_eq!(second.height, 60.0);
+        // Second is offset right of the first by its width + the gap.
+        assert!((second.x - (first.x + first.width + SPLIT_GAP)).abs() < 1e-3);
+        assert_eq!(first.y, second.y);
+    }
+
+    #[test]
+    fn split_viewport_vertical_divides_height() {
+        let vp = PaneViewport::new(0.0, 0.0, 80.0, 40.0);
+        let (first, second) = split_viewport(vp, SplitDirection::Vertical, 0.25);
+        // (40 - 2) * 0.25 = 9.5 first, 28.5 second.
+        assert!((first.height - 9.5).abs() < 1e-3);
+        assert!((second.height - 28.5).abs() < 1e-3);
+        assert_eq!(first.width, 80.0);
+        assert_eq!(second.width, 80.0);
+        // Second sits below the first.
+        assert!((second.y - (first.y + first.height + SPLIT_GAP)).abs() < 1e-3);
+    }
+
+    /// The two children exactly re-tile the parent: union width/height equals the
+    /// original, accounting for the one inter-pane gap. This is the invariant the
+    /// BSP splitter and the layout walker both rely on.
+    #[test]
+    fn split_viewport_children_fill_parent() {
+        let vp = PaneViewport::new(5.0, 7.0, 200.0, 120.0);
+        for dir in [SplitDirection::Horizontal, SplitDirection::Vertical] {
+            for ratio in [0.0, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0] {
+                let (first, second) = split_viewport(vp, dir, ratio);
+                match dir {
+                    SplitDirection::Horizontal => {
+                        let total = first.width + second.width + SPLIT_GAP;
+                        assert!((total - vp.width).abs() < 1e-3, "horizontal width underflow");
+                        assert_eq!(first.height, vp.height);
+                        assert_eq!(second.height, vp.height);
+                    },
+                    SplitDirection::Vertical => {
+                        let total = first.height + second.height + SPLIT_GAP;
+                        assert!((total - vp.height).abs() < 1e-3, "vertical height underflow");
+                        assert_eq!(first.width, vp.width);
+                        assert_eq!(second.width, vp.width);
+                    },
+                }
+                // Origin never drifts for the first child.
+                assert_eq!(first.x, vp.x);
+                assert_eq!(first.y, vp.y);
+            }
+        }
+    }
+
+    /// Extreme ratios must clamp gracefully (available * 0.0 / 1.0 are valid floats).
+    #[test]
+    fn split_viewport_handles_extreme_ratios() {
+        let vp = PaneViewport::new(0.0, 0.0, 50.0, 50.0);
+        let (first, _) = split_viewport(vp, SplitDirection::Horizontal, 0.0);
+        assert!(first.width <= f32::EPSILON);
+        let (_, second) = split_viewport(vp, SplitDirection::Horizontal, 1.0);
+        assert!(second.width <= f32::EPSILON);
+    }
+
+    /// The resize step and clamp bounds `resize_active` applies. Verified in
+    /// isolation here because the walker itself operates on live `Pane`s (PTYs)
+    /// that can't be built in a unit test.
+    #[test]
+    fn resize_ratio_clamp_math() {
+        let step = 0.05f32;
+        let clamp = |r: f32| r.clamp(0.1, 0.9);
+
+        // A normal mid-range step applies in full.
+        assert!((clamp(0.5 + step) - 0.55).abs() < 1e-3);
+        assert!((clamp(0.5 - step) - 0.45).abs() < 1e-3);
+
+        // Near the floor the negative step clamps to 0.1 (no pane collapses).
+        assert!((clamp(0.12 - step) - 0.1).abs() < 1e-3);
+        assert!((clamp(0.05 - step) - 0.1).abs() < 1e-3);
+
+        // Near the ceiling the positive step clamps to 0.9.
+        assert!((clamp(0.88 + step) - 0.9).abs() < 1e-3);
+        assert!((clamp(0.95 + step) - 0.9).abs() < 1e-3);
+
+        // A clamped ratio is exactly at a bound, never outside [0.1, 0.9].
+        for r in [-1.0, 0.0, 0.05, 0.5, 0.95, 1.0, 2.0] {
+            let c = clamp(r);
+            assert!(c >= 0.1 && c <= 0.9);
+        }
+    }
+
+    /// The drag-resize ratio formula `set_ratio_at` applies: ratio =
+    /// (cursor − origin) / (extent − SPLIT_GAP), clamped [0.1, 0.9]. Verified in
+    /// isolation (the walker needs a live Pane, same caveat as the other tests).
+    #[test]
+    fn drag_ratio_formula() {
+        let origin = 0.0f32;
+        let extent = 100.0f32;
+        let denom = (extent - SPLIT_GAP).max(1.0);
+        let ratio = |cursor: f32| ((cursor - origin) / denom).clamp(0.1, 0.9);
+
+        // Cursor at the midpoint → 0.5.
+        assert!((ratio(49.0) - 0.5).abs() < 1e-3); // (100-2)/2 = 49
+        // Cursor at the left edge clamps to the 0.1 floor.
+        assert!((ratio(0.0) - 0.1).abs() < 1e-3);
+        // Cursor past the right edge clamps to the 0.9 ceiling.
+        assert!((ratio(100.0) - 0.9).abs() < 1e-3);
+        // Cursor tracking is linear within bounds.
+        assert!((ratio(24.5) - 0.25).abs() < 1e-2);
+    }
+
+    /// The border line sits at `origin + (extent − SPLIT_GAP) * ratio + SPLIT_GAP/2`,
+    /// i.e. at the end of the first child's region centered in the gap. This is the
+    /// position `border_at_point` hit-tests against.
+    #[test]
+    fn drag_border_position() {
+        let origin = 10.0f32;
+        let extent = 100.0f32;
+        for ratio in [0.25, 0.5, 0.75] {
+            let first_size = (extent - SPLIT_GAP) * ratio;
+            let border = origin + first_size + SPLIT_GAP / 2.0;
+            // The first child ends at origin + first_size; the border is gap/2 beyond it.
+            assert!((border - (origin + first_size + SPLIT_GAP / 2.0)).abs() < 1e-6);
+            // Sanity: border is strictly inside the viewport.
+            assert!(border > origin && border < origin + extent);
+        }
     }
 }

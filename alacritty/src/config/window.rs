@@ -93,6 +93,16 @@ pub struct TabBarConfig {
 
     /// Height of the tab bar in pixels.
     pub height: u16,
+
+    /// Brightness factor (0.0–1.0) applied to text in inactive panes.
+    /// 1.0 = no dimming. Only takes effect in split-pane layouts.
+    #[serde(default = "default_inactive_pane_dim")]
+    pub inactive_pane_dim: f32,
+}
+
+/// Default brightness factor for inactive-pane text dimming (#21).
+fn default_inactive_pane_dim() -> f32 {
+    0.7
 }
 
 impl Default for TabBarConfig {
@@ -103,6 +113,7 @@ impl Default for TabBarConfig {
             inactive_color: Rgb::new(0x3b, 0x42, 0x58),
             text_color: Rgb::new(0xc0, 0xca, 0xf5),
             height: 36,
+            inactive_pane_dim: default_inactive_pane_dim(),
         }
     }
 }

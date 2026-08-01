@@ -273,6 +273,18 @@ pub enum Action {
     /// Move focus to the pane below.
     SwitchPaneDown,
 
+    /// Resize the active pane: move its border left.
+    ResizePaneLeft,
+
+    /// Resize the active pane: move its border right.
+    ResizePaneRight,
+
+    /// Resize the active pane: move its border up.
+    ResizePaneUp,
+
+    /// Resize the active pane: move its border down.
+    ResizePaneDown,
+
     /// Close the active tab.
     CloseTab,
 
@@ -621,6 +633,15 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         ArrowRight, ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneRight;
         ArrowUp,    ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneUp;
         ArrowDown,  ModifiersState::ALT | ModifiersState::SHIFT;                Action::SwitchPaneDown;
+
+        // Flare pane resize keybindings (move the border in the key's direction).
+        // Vim-style H J K L = left/down/up/right, in the same Alt+Shift family as
+        // pane focus-switching (Alt+Shift+Arrows). Ctrl+Shift+Alt+Arrows was avoided
+        // because many Linux desktop environments grab it for window moving.
+        "h",    ModifiersState::ALT | ModifiersState::SHIFT;                Action::ResizePaneLeft;
+        "l",    ModifiersState::ALT | ModifiersState::SHIFT;                Action::ResizePaneRight;
+        "k",    ModifiersState::ALT | ModifiersState::SHIFT;                Action::ResizePaneUp;
+        "j",    ModifiersState::ALT | ModifiersState::SHIFT;                Action::ResizePaneDown;
 
         // Flare palette keybinding.
         "p",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::TogglePalette;
