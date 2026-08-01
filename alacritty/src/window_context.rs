@@ -734,7 +734,7 @@ impl WindowContext {
 
         // Process a pending palette-triggered session restore.
         if let Some(session) = pending_session_restore {
-            self.restore_session(&session, event_proxy);
+            self.restore_session(&session, event_proxy, false);
             self.display.pending_update.dirty = true;
         }
 
@@ -1100,6 +1100,7 @@ impl WindowContext {
         &mut self,
         session: &crate::session::SessionState,
         proxy: &EventLoopProxy<Event>,
+        startup: bool,
     ) {
         const MAX_PANES: usize = 20;
 
@@ -1110,8 +1111,17 @@ impl WindowContext {
 
         let leaves = first_tab_leaves(&first_tab.root);
 
-        // The first pane already spawned with the saved CWD (injected before window creation),
-        // so only replay additional splits.
+        // At startup the first pane spawns with the saved CWD (injected before window creation),
+        // so no cd is needed. When restoring from the palette mid-session, the current pane is
+        // already running in a different directory, so we cd it.
+        if !startup {
+            if let Some(first_cwd) = leaves.first() {
+                if let Some(cmd) = make_cd_command(first_cwd) {
+                    let _ = self.notifier.0.send(Msg::Input(cmd.into()));
+                }
+            }
+        }
+
         let mut created = 1usize;
         for cwd in leaves.iter().skip(1) {
             if created >= MAX_PANES {
@@ -1373,4 +1383,13 @@ fn sanitize_cwd(path: Option<&Path>) -> Option<PathBuf> {
     } else {
         None
     }
+}
+
+fn make_cd_command(path: &Path) -> Option<Vec<u8>> {
+    let s = path.to_str()?;
+    if s.is_empty() {
+        return None;
+    }
+    let quoted = s.replace('\'', "'\\''");
+    Some(format!("cd '{quoted}'\n").into_bytes())
 }

@@ -322,6 +322,11 @@ impl SizeInfo<f32> {
         self
     }
 
+    pub fn with_padding_x(mut self, padding_x: f32) -> SizeInfo {
+        self.padding_x = padding_x;
+        self
+    }
+
     /// Check if coordinates are inside the terminal grid.
     ///
     /// The padding, message bar or search are not counted as part of the grid.
@@ -2109,9 +2114,12 @@ impl Display {
         let visible = palette.visible();
         let total = visible.len();
 
+        // Clamp selection to valid bounds (defensive against stale indices).
+        let selected = if total == 0 { 0 } else { palette.selected().min(total - 1) };
+
         // Compute the scroll window: keep the selection visible.
         let max_scroll = total.saturating_sub(MAX_VISIBLE_ROWS);
-        let scroll_offset = palette.selected().saturating_sub(MAX_VISIBLE_ROWS / 2).min(max_scroll);
+        let scroll_offset = selected.saturating_sub(MAX_VISIBLE_ROWS / 2).min(max_scroll);
         let end = (scroll_offset + MAX_VISIBLE_ROWS).min(total);
         let shown_count = end - scroll_offset;
 
@@ -2128,9 +2136,9 @@ impl Display {
         let text_fg = config.colors.primary.foreground;
         let row_h = size_info.cell_height();
 
-        // Selected row Y (adjusted for scroll offset).
-        let selected_in_view = palette.selected() - scroll_offset;
-        let selected_y = box_y + 8.0 + row_h + (selected_in_view as f32 * row_h);
+        // Selected row Y: entries start at row 2 (title=0, query=1).
+        let selected_in_view = selected - scroll_offset;
+        let selected_y = box_y + 8.0 + ((selected_in_view + 2) as f32 * row_h);
 
         let mut rects = vec![
             RenderRect::new(0.0, 0.0, size_info.width(), size_info.height(), bg, 0.55),
@@ -2143,7 +2151,7 @@ impl Display {
             let track_x = box_x + box_width - 6.0;
             let track_h = (shown_count as f32 * row_h).max(row_h);
             let thumb_h = ((MAX_VISIBLE_ROWS as f32 / total as f32) * track_h).max(row_h * 0.4);
-            let track_top = box_y + 8.0 + row_h;
+            let track_top = box_y + 8.0 + (2.0 * row_h);
             let thumb_y = track_top + (scroll_offset as f32 / total as f32) * track_h;
             rects.push(RenderRect::new(track_x, track_top, 2.0, track_h, dim, 0.3));
             rects.push(RenderRect::new(track_x, thumb_y, 2.0, thumb_h, accent, 0.6));
@@ -2164,7 +2172,7 @@ impl Display {
         } else {
             for (view_i, abs_i) in (scroll_offset..end).enumerate() {
                 let (_, entry) = &visible[abs_i];
-                let fg = if abs_i == palette.selected() { accent } else { text_fg };
+                let fg = if abs_i == selected { accent } else { text_fg };
                 self.draw_palette_row(
                     &crate::path_util::shorten_path(&entry.root),
                     view_i + 2,
@@ -2199,17 +2207,12 @@ impl Display {
         cols: usize,
         size_info: SizeInfo,
     ) {
-        let pad_y = box_y + 8.0 + (y_row as f32 * row_h);
-        let text_size = SizeInfo::new(
-            size_info.width(),
-            size_info.height(),
-            size_info.cell_width(),
-            size_info.cell_height(),
-            box_x + 10.0,
-            pad_y,
-            false,
-            0.0,
-        );
+        // Position text by shifting the grid origin (tab_bar_offset_y) to the palette's top,
+        // then using the real padding_y. This avoids distorting screen_lines/viewport.
+        let target_y = box_y + 8.0 + (y_row as f32 * row_h);
+        let offset = target_y - size_info.padding_y();
+        let text_size = size_info.with_tab_bar_offset(offset).with_padding_x(box_x + 10.0);
+
         let truncated: String = if text.chars().count() > cols {
             let mut s: String = text.chars().take(cols.saturating_sub(1)).collect();
             s.push('…');

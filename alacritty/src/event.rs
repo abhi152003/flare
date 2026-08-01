@@ -284,7 +284,7 @@ impl ApplicationHandler<Event> for Processor {
         if let Some(session) = saved_session {
             if let Some(window_id) = self.windows.keys().next().copied() {
                 if let Some(window) = self.windows.get_mut(&window_id) {
-                    window.restore_session(&session, &self.proxy);
+                    window.restore_session(&session, &self.proxy, true);
                 }
             }
         }
