@@ -363,6 +363,7 @@ impl fmt::Debug for Pane {
 pub struct Tab {
     pub root: PaneNode,
     pub name: Option<String>,
+    pub zoomed: bool,
 }
 
 impl Tab {
@@ -381,6 +382,13 @@ impl Tab {
     /// Whether this tab has multiple panes (split view).
     pub fn is_split(&self) -> bool {
         !self.root.is_leaf()
+    }
+
+    /// Toggle zoom: expand the active pane to fill the tab, or restore the split layout.
+    pub fn toggle_zoom(&mut self) {
+        if self.is_split() {
+            self.zoomed = !self.zoomed;
+        }
     }
 
     /// Get viewport rectangles for all panes in this tab.

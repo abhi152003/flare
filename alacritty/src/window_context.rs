@@ -250,7 +250,7 @@ impl WindowContext {
             #[cfg(not(windows))]
             shell_pid,
         };
-        let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane), name: None };
+        let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane), name: None, zoomed: false };
         let mut tab_manager = TabManager::new();
         tab_manager.add_tab(initial_tab);
 
@@ -886,7 +886,7 @@ impl WindowContext {
             shell_pid,
         };
 
-        let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane), name: None };
+        let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane), name: None, zoomed: false };
 
         // Store the new tab's terminal state for later activation.
         self.tab_manager.add_tab(new_tab);
@@ -994,6 +994,11 @@ impl WindowContext {
         // Force a display update so the remaining pane's terminal is resized to fill
         // the space that was freed when the closed pane was removed.
         self.display.pending_update.dirty = true;
+
+        // Un-zoom if closing the pane left a single pane.
+        if !self.tab_manager.active_tab().is_split() {
+            self.tab_manager.active_tab_mut().zoomed = false;
+        }
 
         // Activate the new active pane.
         self.activate_current_pane(proxy);
@@ -1280,6 +1285,11 @@ impl WindowContext {
                 if tab.focus_adjacent_pane(tab::SplitDirection::Vertical, false, full_viewport) {
                     self.activate_current_pane(proxy);
                 }
+            },
+            TabAction::TogglePaneZoom => {
+                self.tab_manager.active_tab_mut().toggle_zoom();
+                self.display.pending_update.dirty = true;
+                self.dirty = true;
             },
         }
     }

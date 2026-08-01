@@ -1409,7 +1409,11 @@ impl Display {
             size_info.height() - 2.0 * size_info.padding_y() - size_info.tab_bar_offset_y();
 
         let full_viewport = PaneViewport::new(content_x, content_y, content_width, content_height);
-        let pane_viewports = tab.pane_viewports(full_viewport);
+        let pane_viewports = if tab.zoomed {
+            vec![(full_viewport, tab.active_pane())]
+        } else {
+            tab.pane_viewports(full_viewport)
+        };
 
         let active_pane = tab.active_pane();
 
@@ -1519,8 +1523,10 @@ impl Display {
             let _ = (selection_range, display_offset, foreground_color, background_color);
         }
 
-        // Draw split borders between panes.
-        self.draw_split_decorations(&pane_viewports, active_pane, &size_info, config, &metrics);
+        // Draw split borders between panes (skip when zoomed — single pane fills the tab).
+        if !tab.zoomed {
+            self.draw_split_decorations(&pane_viewports, active_pane, &size_info, config, &metrics);
+        }
 
         // Restore viewport to full size for tab bar / message bar rendering.
         self.renderer.set_viewport(&size_info);

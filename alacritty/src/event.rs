@@ -778,6 +778,7 @@ pub enum TabAction {
     SwitchPaneRight,
     SwitchPaneUp,
     SwitchPaneDown,
+    TogglePaneZoom,
 }
 
 pub struct ActionContext<'a, N, T> {
@@ -1670,6 +1671,10 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn switch_pane_down(&mut self) {
         *self.pending_tab_action = Some(TabAction::SwitchPaneDown);
+    }
+
+    fn toggle_pane_zoom(&mut self) {
+        *self.pending_tab_action = Some(TabAction::TogglePaneZoom);
     }
 
     fn toggle_palette(&mut self) {

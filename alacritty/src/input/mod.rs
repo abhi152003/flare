@@ -164,6 +164,7 @@ pub trait ActionContext<T: EventListener> {
     fn palette_active(&self) -> bool { false }
     fn palette_state_mut(&mut self) -> Option<&mut crate::palette::PaletteState> { None }
     fn restore_session(&mut self, _session: crate::session::SessionState) {}
+    fn toggle_pane_zoom(&mut self) {}
 }
 
 impl Action {
@@ -476,6 +477,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::SwitchPaneUp => ctx.switch_pane_up(),
             Action::SwitchPaneDown => ctx.switch_pane_down(),
             Action::TogglePalette => ctx.toggle_palette(),
+            Action::TogglePaneZoom => ctx.toggle_pane_zoom(),
             _ => (),
         }
     }

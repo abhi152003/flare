@@ -278,6 +278,9 @@ pub enum Action {
 
     /// Toggle the directory/session switcher palette.
     TogglePalette,
+
+    /// Toggle pane zoom (expand active pane to fill the tab).
+    TogglePaneZoom,
 }
 
 impl From<&'static str> for Action {
@@ -621,6 +624,9 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
 
         // Flare palette keybinding.
         "p",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::TogglePalette;
+
+        // Flare pane zoom keybinding.
+        "z",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::TogglePaneZoom;
     ));
 
     bindings
