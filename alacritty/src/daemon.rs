@@ -165,3 +165,41 @@ pub fn foreground_process_path(
         Ok(PathBuf::from(foreground_path))
     }
 }
+
+/// Get the basename of the foreground process's argv[0] (e.g. `claude`, not its full path).
+///
+/// Used for AI-agent detection (see `agent::detect`). Mirrors `foreground_process_path`: resolves
+/// the foreground process group via `tcgetpgrp` (falling back to `shell_pid`), then reads
+/// `/proc/<pid>/cmdline`. On platforms without `/proc`, returns an empty string (detection no-ops).
+#[cfg(not(any(windows, target_os = "openbsd")))]
+pub fn foreground_process_name(master_fd: RawFd, shell_pid: u32) -> Result<String, Box<dyn Error>> {
+    let mut pid = unsafe { libc::tcgetpgrp(master_fd) };
+    if pid < 0 {
+        pid = shell_pid as pid_t;
+    }
+
+    // cmdline is NUL-separated; argv[0] is the first field.
+    #[cfg(not(target_os = "freebsd"))]
+    let cmdline_path = format!("/proc/{pid}/cmdline");
+    #[cfg(target_os = "freebsd")]
+    let cmdline_path = format!("/compat/linux/proc/{}/cmdline", pid);
+
+    let raw = fs::read(&cmdline_path)?;
+    let argv0 = raw.split(|&b| b == 0).next().filter(|s| !s.is_empty());
+    let name = argv0
+        .and_then(|bytes| {
+            // Take the basename (last path segment) so `/usr/local/bin/claude` -> `claude`.
+            let full = String::from_utf8_lossy(bytes).to_string();
+            full.rsplit('/').next().map(str::to_string)
+        })
+        .unwrap_or_default();
+
+    Ok(name)
+}
+
+/// Stub: foreground process name is unavailable on OpenBSD (no `/proc`).
+#[cfg(target_os = "openbsd")]
+pub fn foreground_process_name(_master_fd: RawFd, _shell_pid: u32) -> Result<String, Box<dyn Error>> {
+    Ok(String::new())
+}
+

@@ -861,7 +861,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
-        tab_bar_info: Option<(&[String], usize)>,
+        tab_bar_info: Option<(&[tab::TabBarEntry], usize)>,
         close_button_hovered: bool,
         palette: &crate::palette::PaletteState,
     ) {
@@ -1134,7 +1134,7 @@ impl Display {
                         .max(size_info.cell_width() * tab_count as f32);
                 let tab_width = available_width / tab_count as f32;
 
-                for (i, title) in tab_titles.iter().enumerate() {
+                for (i, entry) in tab_titles.iter().enumerate() {
                     let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
 
                     let (_fg, bg) = if i == active_index {
@@ -1155,9 +1155,18 @@ impl Display {
                         1.,
                     ));
 
+                    // Agent status dot: a small colored square at the left edge of the pill,
+                    // vertically centered. Color keyed by agent kind (see AgentKind::color).
+                    if let Some(agent) = entry.agent {
+                        let dot_size = (tab_rect_height - 8.0).max(6.0).min(10.0);
+                        let dot_x = tab_x + 6.0;
+                        let dot_y = tab_rect_y + (tab_rect_height - dot_size) / 2.0;
+                        rects.push(RenderRect::new(dot_x, dot_y, dot_size, dot_size, agent.color(), 1.));
+                    }
+
                     let max_chars = (tab_width / size_info.cell_width()) as usize;
                     let _display_string: String = StrShortener::new(
-                        title,
+                        &entry.title,
                         std::cmp::max(max_chars, 1),
                         ShortenDirection::Right,
                         Some('.'),
@@ -1258,7 +1267,7 @@ impl Display {
             let tab_width = available_width / tab_count as f32;
             let tab_text_size_info = size_info.with_tab_bar_offset(0.0);
 
-            for (i, title) in tab_titles.iter().enumerate() {
+            for (i, entry) in tab_titles.iter().enumerate() {
                 let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
                 let (fg, _) = if i == active_index {
                     (tab_config.text_color, tab_config.active_color)
@@ -1268,7 +1277,7 @@ impl Display {
 
                 let max_chars = (tab_width / size_info.cell_width()) as usize;
                 let display_string: String = StrShortener::new(
-                    title,
+                    &entry.title,
                     std::cmp::max(max_chars, 1),
                     ShortenDirection::Right,
                     Some('.'),
@@ -1373,7 +1382,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
-        tab_bar_info: Option<(&[String], usize)>,
+        tab_bar_info: Option<(&[tab::TabBarEntry], usize)>,
         close_button_hovered: bool,
         palette: &crate::palette::PaletteState,
     ) {
@@ -1696,7 +1705,7 @@ impl Display {
         config: &UiConfig,
         size_info: &SizeInfo,
         metrics: &crossfont::Metrics,
-        tab_titles: &[String],
+        tab_titles: &[tab::TabBarEntry],
         active_index: usize,
         close_button_hovered: bool,
     ) {
@@ -1725,7 +1734,7 @@ impl Display {
                 .max(size_info.cell_width() * tab_count as f32);
         let tab_width = available_width / tab_count as f32;
 
-        for (i, _title) in tab_titles.iter().enumerate() {
+        for (i, entry) in tab_titles.iter().enumerate() {
             let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
             let (_fg, bg) = if i == active_index {
                 (tab_config.text_color, tab_config.active_color)
@@ -1743,6 +1752,15 @@ impl Display {
                 bg,
                 1.,
             ));
+
+            // Agent status dot: a small colored square at the left edge of the pill,
+            // vertically centered. Color keyed by agent kind (see AgentKind::color).
+            if let Some(agent) = entry.agent {
+                let dot_size = (tab_rect_height - 8.0).max(6.0).min(10.0);
+                let dot_x = tab_x + 6.0;
+                let dot_y = tab_rect_y + (tab_rect_height - dot_size) / 2.0;
+                tab_rects.push(RenderRect::new(dot_x, dot_y, dot_size, dot_size, agent.color(), 1.));
+            }
         }
 
         // Close button background (decorations=none).
@@ -1771,7 +1789,7 @@ impl Display {
         let glyph_cache = &mut self.glyph_cache;
         let tab_text_size_info = size_info.with_tab_bar_offset(0.0);
 
-        for (i, title) in tab_titles.iter().enumerate() {
+        for (i, entry) in tab_titles.iter().enumerate() {
             let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
             let (fg, _) = if i == active_index {
                 (tab_config.text_color, tab_config.active_color)
@@ -1781,7 +1799,7 @@ impl Display {
 
             let max_chars = (tab_width / size_info.cell_width()) as usize;
             let display_string: String = StrShortener::new(
-                title,
+                &entry.title,
                 std::cmp::max(max_chars, 1),
                 ShortenDirection::Right,
                 Some('.'),
@@ -2180,7 +2198,7 @@ impl Display {
                 let (_, entry) = &visible[abs_i];
                 let fg = if abs_i == selected { accent } else { text_fg };
                 self.draw_palette_row(
-                    &crate::path_util::shorten_path(&entry.root),
+                    &crate::path_util::shorten_path(&entry.label),
                     view_i + 2,
                     fg,
                     bg,

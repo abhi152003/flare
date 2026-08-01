@@ -249,6 +249,7 @@ impl WindowContext {
             master_fd,
             #[cfg(not(windows))]
             shell_pid,
+            agent: None,
         };
         let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane), name: None, zoomed: false };
         let mut tab_manager = TabManager::new();
@@ -539,14 +540,19 @@ impl WindowContext {
 
         // Collect tab bar info for rendering.
         let tab_bar_info = if self.tab_manager.tab_count() > 1 {
-            let titles: Vec<String> = self
+            let entries: Vec<tab::TabBarEntry> = self
                 .tab_manager
                 .tabs()
                 .iter()
                 .enumerate()
-                .map(|(index, tab)| self.smart_tab_title(tab, index))
+                .map(|(index, tab)| {
+                    tab::TabBarEntry {
+                        title: self.smart_tab_title(tab, index),
+                        agent: tab.active_pane().agent,
+                    }
+                })
                 .collect();
-            Some((titles, self.tab_manager.active_tab_index()))
+            Some((entries, self.tab_manager.active_tab_index()))
         } else {
             None
         };
@@ -561,7 +567,7 @@ impl WindowContext {
                 &self.message_buffer,
                 &self.config,
                 &mut self.search_state,
-                tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
+                tab_bar_info.as_ref().map(|(e, i)| (e.as_slice(), *i)),
                 self.close_button_hovered,
                 &self.palette_state,
             );
@@ -574,7 +580,7 @@ impl WindowContext {
                 &self.message_buffer,
                 &self.config,
                 &mut self.search_state,
-                tab_bar_info.as_ref().map(|(t, i)| (t.as_slice(), *i)),
+                tab_bar_info.as_ref().map(|(e, i)| (e.as_slice(), *i)),
                 self.close_button_hovered,
                 &self.palette_state,
             );
@@ -884,6 +890,7 @@ impl WindowContext {
             master_fd,
             #[cfg(not(windows))]
             shell_pid,
+            agent: None,
         };
 
         let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane), name: None, zoomed: false };
@@ -1049,24 +1056,45 @@ impl WindowContext {
                 return name.clone();
             }
         }
-        // 2. Shell-reported title (OSC 0/2).
         let pane = tab.active_pane();
         let term = pane.terminal.lock();
-        if let Some(title) = term.title.as_ref() {
-            if !title.trim().is_empty() {
-                return title.clone();
-            }
-        }
-        // 3. Shortened CWD (OSC 7 reported or /proc).
-        if let Some(cwd) = term.cwd.clone() {
-            return crate::path_util::shorten_path(&cwd);
-        }
+        // Shell-reported title (OSC 0/2) — kept as the base when present.
+        let shell_title = term.title.as_ref().filter(|t| !t.trim().is_empty()).cloned();
+        // CWD the shell reported via OSC 7 (most accurate).
+        let cwd = term.cwd.clone();
         drop(term);
-        if let Some(cwd) = self.pane_cwd(pane) {
-            return crate::path_util::shorten_path(&cwd);
+
+        // Fall back to /proc if the shell hasn't reported OSC 7 yet.
+        let cwd = cwd.or_else(|| self.pane_cwd(pane));
+
+        // Resolve the git branch from whatever CWD we have (walks up to .git/HEAD).
+        let branch = cwd.as_ref().and_then(|c| crate::path_util::git_branch(c.as_path()));
+
+        // Base title: prefer the shell-reported title, then the shortened CWD.
+        let title = if let Some(shell_title) = shell_title {
+            shell_title
+        } else if let Some(cwd) = cwd.as_ref() {
+            crate::path_util::shorten_path(cwd)
+        } else {
+            // Fallback.
+            return tab::Tab::auto_title(index);
+        };
+
+        // Append the branch unless the title already contains it (e.g. a prompt
+        // that embeds the branch) to avoid duplication.
+        let title = match branch {
+            Some(branch) if !title.contains(&branch) => format!("{title} · {branch}"),
+            _ => title,
+        };
+
+        // Append the detected agent's name (e.g. `· claude`) so the agent is identifiable
+        // in the title, complementing the colored status dot.
+        match pane.agent {
+            Some(agent) if !title.contains(agent.label()) => {
+                format!("{title} · {}", agent.label())
+            },
+            _ => title,
         }
-        // 4. Fallback.
-        tab::Tab::auto_title(index)
     }
 
     fn pane_cwd(&self, pane: &tab::Pane) -> Option<PathBuf> {
@@ -1084,6 +1112,40 @@ impl WindowContext {
             let _ = pane;
             None
         }
+    }
+
+    /// The agent detected in the active pane, if any. Public accessor for the status-dot UI (#10).
+    #[allow(dead_code)] // wired by the status-dot UI in #10.
+    pub fn active_agent(&self) -> Option<crate::agent::AgentKind> {
+        self.tab_manager.active_tab().active_pane().agent
+    }
+
+    /// Re-run agent detection across every pane in every tab.
+    ///
+    /// Reads each pane's foreground process name and matches it against the agent profiles in
+    /// `agent::detect`. Returns true if any pane's detected agent changed, so the caller can
+    /// request a redraw. Designed to be called on a periodic timer (see `Topic::AgentDetect`).
+    pub fn detect_agents(&mut self) -> bool {
+        let mut changed = false;
+        for tab in self.tab_manager.tabs_mut() {
+            for pane in tab.root.iter_leaves_mut() {
+                #[cfg(not(windows))]
+                let detected = crate::daemon::foreground_process_name(pane.master_fd, pane.shell_pid)
+                    .ok()
+                    .and_then(|name| crate::agent::detect(&name));
+                #[cfg(windows)]
+                let detected = None;
+
+                if pane.agent != detected {
+                    pane.agent = detected;
+                    changed = true;
+                }
+            }
+        }
+        if changed {
+            self.dirty = true;
+        }
+        changed
     }
 
     pub fn collect_session(&self) -> Option<crate::session::SessionState> {
@@ -1226,6 +1288,7 @@ impl WindowContext {
             master_fd,
             #[cfg(not(windows))]
             shell_pid,
+            agent: None,
         })
     }
 

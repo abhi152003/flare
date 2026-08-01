@@ -304,6 +304,20 @@ impl ApplicationHandler<Event> for Processor {
             }
         }
 
+        // Schedule periodic agent detection so the status-dot UI (#10) reflects the foreground
+        // process in each pane without relying on redraws (idle panes don't redraw on their own).
+        if let Some(window_id) = self.windows.keys().next().copied() {
+            let timer_id = TimerId::new(Topic::AgentDetect, window_id);
+            if !self.scheduler.scheduled(timer_id) {
+                self.scheduler.schedule(
+                    Event::new(EventType::AgentDetect, window_id),
+                    Duration::from_secs(2),
+                    true,
+                    timer_id,
+                );
+            }
+        }
+
         info!("Initialisation complete");
     }
 
@@ -535,6 +549,13 @@ impl ApplicationHandler<Event> for Processor {
             (EventType::SessionSave, _) => {
                 self.save_all_sessions();
             },
+            (EventType::AgentDetect, Some(window_id)) => {
+                if let Some(window_context) = self.windows.get_mut(window_id) {
+                    if window_context.detect_agents() {
+                        window_context.display.window.request_redraw();
+                    }
+                }
+            },
             (payload, Some(window_id)) => {
                 if let Some(window_context) = self.windows.get_mut(window_id) {
                     window_context.handle_event(
@@ -659,6 +680,7 @@ pub enum EventType {
     Shutdown,
     Frame,
     SessionSave,
+    AgentDetect,
 }
 
 impl From<TerminalEvent> for EventType {
@@ -2137,7 +2159,8 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)
                 | EventType::Frame
-                | EventType::SessionSave => (),
+                | EventType::SessionSave
+                | EventType::AgentDetect => (),
             },
             WinitEvent::WindowEvent { event, .. } => {
                 match event {

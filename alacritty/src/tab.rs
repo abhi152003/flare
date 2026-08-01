@@ -85,6 +85,19 @@ impl PaneNode {
         }
     }
 
+    /// Mutable variant of [`iter_leaves`](Self::iter_leaves), for periodic state refresh
+    /// (e.g. agent detection) that writes back onto each pane.
+    pub fn iter_leaves_mut(&mut self) -> Vec<&mut Pane> {
+        match self {
+            PaneNode::Leaf(pane) => vec![pane],
+            PaneNode::Split { first, second, .. } => {
+                let mut leaves = first.iter_leaves_mut();
+                leaves.extend(second.iter_leaves_mut());
+                leaves
+            },
+        }
+    }
+
     /// Whether this node is a single leaf (no splits).
     pub fn is_leaf(&self) -> bool {
         matches!(self, PaneNode::Leaf(_))
@@ -104,6 +117,7 @@ impl PaneNode {
                     master_fd: pane.master_fd,
                     #[cfg(not(windows))]
                     shell_pid: pane.shell_pid,
+                    agent: pane.agent,
                 };
                 *self = PaneNode::Split {
                     direction,
@@ -351,6 +365,9 @@ pub struct Pane {
     pub master_fd: std::os::unix::io::RawFd,
     #[cfg(not(windows))]
     pub shell_pid: u32,
+    /// Detected AI agent running in this pane's foreground process, if any.
+    /// Refreshed periodically by `WindowContext::detect_agents`.
+    pub agent: Option<crate::agent::AgentKind>,
 }
 
 impl fmt::Debug for Pane {
@@ -364,6 +381,14 @@ pub struct Tab {
     pub root: PaneNode,
     pub name: Option<String>,
     pub zoomed: bool,
+}
+
+/// Per-tab info for tab-bar rendering: the resolved title plus an optional detected agent whose
+/// status dot is drawn next to it.
+#[derive(Clone)]
+pub struct TabBarEntry {
+    pub title: String,
+    pub agent: Option<crate::agent::AgentKind>,
 }
 
 impl Tab {
@@ -516,6 +541,10 @@ impl TabManager {
 
     pub fn tabs(&self) -> &[Tab] {
         &self.tabs
+    }
+
+    pub fn tabs_mut(&mut self) -> &mut [Tab] {
+        &mut self.tabs
     }
 
     pub fn select_tab(&mut self, index: usize) {

@@ -30,6 +30,7 @@ pub enum Topic {
     BlinkTimeout,
     Frame,
     SessionSave,
+    AgentDetect,
 }
 
 /// Event scheduled to be emitted at a specific time.

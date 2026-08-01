@@ -107,7 +107,13 @@ impl PaletteState {
             .entries
             .iter()
             .enumerate()
-            .filter_map(|(i, e)| fuzzy_score(&e.root.to_string_lossy(), &q).map(|s| (i, s)))
+            // Score against the visible label (repo-rooted) and the full root path;
+            // keep the better match so deep-subdir names stay searchable.
+            .filter_map(|(i, e)| {
+                let by_label = fuzzy_score(&e.label.to_string_lossy(), &q);
+                let by_root = fuzzy_score(&e.root.to_string_lossy(), &q);
+                by_label.max(by_root).map(|s| (i, s))
+            })
             .collect();
 
         // Higher score first; ties keep entry order (already most-recent first).
@@ -196,8 +202,18 @@ mod tests {
     fn empty_query_matches_everything() {
         let mut p = PaletteState::default();
         p.entries = vec![
-            SessionEntry { root: PathBuf::from("/a"), last_used: 1, pane_count: 1 },
-            SessionEntry { root: PathBuf::from("/b"), last_used: 2, pane_count: 1 },
+            SessionEntry {
+                root: PathBuf::from("/a"),
+                label: PathBuf::from("/a"),
+                last_used: 1,
+                pane_count: 1,
+            },
+            SessionEntry {
+                root: PathBuf::from("/b"),
+                label: PathBuf::from("/b"),
+                last_used: 2,
+                pane_count: 1,
+            },
         ];
         p.open = true;
         p.rebuild_filter();
@@ -208,8 +224,18 @@ mod tests {
     fn query_filters_entries() {
         let mut p = PaletteState::default();
         p.entries = vec![
-            SessionEntry { root: PathBuf::from("/home/u/api"), last_used: 1, pane_count: 1 },
-            SessionEntry { root: PathBuf::from("/home/u/web"), last_used: 2, pane_count: 1 },
+            SessionEntry {
+                root: PathBuf::from("/home/u/api"),
+                label: PathBuf::from("/home/u/api"),
+                last_used: 1,
+                pane_count: 1,
+            },
+            SessionEntry {
+                root: PathBuf::from("/home/u/web"),
+                label: PathBuf::from("/home/u/web"),
+                last_used: 2,
+                pane_count: 1,
+            },
         ];
         p.open = true;
         p.query = "ap".to_string();
@@ -223,8 +249,18 @@ mod tests {
     fn navigation_clamps() {
         let mut p = PaletteState::default();
         p.entries = vec![
-            SessionEntry { root: PathBuf::from("/a"), last_used: 1, pane_count: 1 },
-            SessionEntry { root: PathBuf::from("/b"), last_used: 2, pane_count: 1 },
+            SessionEntry {
+                root: PathBuf::from("/a"),
+                label: PathBuf::from("/a"),
+                last_used: 1,
+                pane_count: 1,
+            },
+            SessionEntry {
+                root: PathBuf::from("/b"),
+                label: PathBuf::from("/b"),
+                last_used: 2,
+                pane_count: 1,
+            },
         ];
         p.open = true;
         p.rebuild_filter();

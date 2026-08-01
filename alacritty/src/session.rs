@@ -234,6 +234,8 @@ pub fn load(root: &Path) -> Option<SessionState> {
 #[derive(Debug, Clone)]
 pub struct SessionEntry {
     pub root: PathBuf,
+    /// Display label: the git repo root when `root` is inside a repo, otherwise `root` itself.
+    pub label: PathBuf,
     pub last_used: u64,
     #[allow(dead_code)]
     pub pane_count: usize,
@@ -265,8 +267,14 @@ pub fn list() -> Vec<SessionEntry> {
         {
             Ok(state) if state.version == SESSION_FORMAT_VERSION => {
                 let pane_count = state.pane_count();
+                // Label sessions by their git repo root when the CWD is inside a
+                // repo, so a session saved from a deep subdirectory still shows
+                // the project root. Falls back to the CWD path outside a repo.
+                let label = crate::path_util::git_repo_root(&state.root)
+                    .unwrap_or_else(|| state.root.clone());
                 entries.push(SessionEntry {
                     root: state.root,
+                    label,
                     last_used: state.last_used,
                     pane_count,
                 });
@@ -278,7 +286,24 @@ pub fn list() -> Vec<SessionEntry> {
         }
     }
     entries.sort_by(|a, b| b.last_used.cmp(&a.last_used).then(a.root.cmp(&b.root)));
+    dedup_by_label(&mut entries);
     entries
+}
+
+/// Remove entries whose `label` duplicates an earlier one, keeping the first (most-recently-used)
+/// occurrence. Sessions saved from subdirectories of the same git repo collapse to the same
+/// repo-root label; without dedup the palette would show identical rows. Hidden session files
+/// remain on disk and resurface once they become the newest for that repo.
+fn dedup_by_label(entries: &mut Vec<SessionEntry>) {
+    let mut seen: Vec<PathBuf> = Vec::with_capacity(entries.len());
+    entries.retain(|e| {
+        if seen.contains(&e.label) {
+            false
+        } else {
+            seen.push(e.label.clone());
+            true
+        }
+    });
 }
 
 /// The most-recently-used session, fully loaded.
@@ -420,5 +445,35 @@ mod tests {
         let parsed: Result<SessionState, _> = toml::from_str(bad);
         assert!(parsed.is_ok());
         assert_ne!(parsed.unwrap().version, SESSION_FORMAT_VERSION);
+    }
+
+    #[test]
+    fn dedup_keeps_most_recent_per_label() {
+        // Two sessions collapse to the same label (repo root); the older one is dropped.
+        let mut entries = vec![
+            SessionEntry {
+                root: PathBuf::from("/home/u/proj/sub"),
+                label: PathBuf::from("/home/u/proj"),
+                last_used: 100,
+                pane_count: 1,
+            },
+            SessionEntry {
+                root: PathBuf::from("/home/u/proj"),
+                label: PathBuf::from("/home/u/proj"),
+                last_used: 10,
+                pane_count: 1,
+            },
+            SessionEntry {
+                root: PathBuf::from("/home/u/other"),
+                label: PathBuf::from("/home/u/other"),
+                last_used: 50,
+                pane_count: 1,
+            },
+        ];
+        dedup_by_label(&mut entries);
+        assert_eq!(entries.len(), 2);
+        // Most-recent for the shared label wins.
+        assert_eq!(entries[0].root, PathBuf::from("/home/u/proj/sub"));
+        assert_eq!(entries[1].root, PathBuf::from("/home/u/other"));
     }
 }
