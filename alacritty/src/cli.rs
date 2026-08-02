@@ -204,6 +204,8 @@ impl From<TerminalOptions> for PtyOptions {
             shell: options.command().map(Into::into),
             drain_on_exit: options.hold,
             env: HashMap::new(),
+            // CLI `-e` runs a specific program, not the user's shell — skip integration.
+            shell_integration: false,
             #[cfg(target_os = "windows")]
             escape_args: false,
         }

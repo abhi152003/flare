@@ -35,6 +35,11 @@ pub struct Options {
     /// Extra environment variables.
     pub env: HashMap<String, String>,
 
+    /// Whether to auto-inject shell-integration hooks at startup (#22). When true,
+    /// the shell is launched through a generated wrapper that emits OSC 7 so the
+    /// terminal tracks the real working directory.
+    pub shell_integration: bool,
+
     /// Specifies whether the Windows shell arguments should be escaped.
     ///
     /// - When `true`: Arguments will be escaped according to the standard C runtime rules.

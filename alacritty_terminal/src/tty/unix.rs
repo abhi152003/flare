@@ -220,6 +220,40 @@ pub fn from_fd(config: &Options, window_id: u64, master: OwnedFd, slave: OwnedFd
         default_shell_command(&user.shell, &user.user, &user.home)
     };
 
+    // Auto-inject shell integration (#22): launch the shell through a generated
+    // wrapper that emits OSC 7 on cwd change. Any failure falls back to the plain
+    // shell — integration is a nicety, never a boot blocker.
+    #[cfg(not(target_os = "macos"))]
+    if config.shell_integration {
+        let program = config.shell.as_ref().map(|s| s.program.as_str()).unwrap_or(&user.shell);
+        if let Some(family) = crate::shell_integration::family_for(program) {
+            if let Ok(wrapper) =
+                crate::shell_integration::write_wrapper(family, std::path::Path::new(&user.home))
+            {
+                match family {
+                    crate::shell_integration::ShellFamily::Bash => {
+                        // bash reads the wrapper via --init-file instead of ~/.bashrc.
+                        builder = Command::new(program);
+                        builder.arg("--init-file").arg(wrapper);
+                    },
+                    crate::shell_integration::ShellFamily::Zsh => {
+                        // zsh sources ZDOTDIR/.zshrc; point ZDOTDIR at a dir whose
+                        // .zshrc is our wrapper (which itself sources the real ~/.zshrc).
+                        builder = Command::new(program);
+                        if let Some(dir) = wrapper.parent() {
+                            builder.env("ZDOTDIR", dir);
+                        }
+                    },
+                    crate::shell_integration::ShellFamily::Fish => {
+                        // fish sources conf.d snippets; pass the wrapper directly.
+                        builder = Command::new(program);
+                        builder.arg("-C").arg(format!("source {}", wrapper.display()));
+                    },
+                }
+            }
+        }
+    }
+
     // Setup child stdin/stdout/stderr as slave fd of PTY.
     builder.stdin(slave.try_clone()?);
     builder.stderr(slave.try_clone()?);
