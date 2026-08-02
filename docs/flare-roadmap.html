@@ -126,6 +126,15 @@
   .tag { font-family: 'JetBrains Mono', monospace; font-size: 0.66rem; padding: 3px 9px; border-radius: 5px; background: rgba(255,255,255,0.06); color: var(--flash-muted); letter-spacing: 0.03em; }
   .tag.hot { background: rgba(233,99,26,0.16); color: var(--orange-soft); }
 
+  /* ── Scope note (cross-cutting context, not a tier) ── */
+  .scope-note { background: linear-gradient(180deg, rgba(110,171,198,0.05), rgba(110,171,198,0.02)); border: 1px solid rgba(110,171,198,0.18); border-radius: 14px; padding: 28px 28px 24px; margin: 0 0 8px; }
+  .scope-note h3 { font-family: 'Bricolage Grotesque', sans-serif; font-weight: 600; font-size: 1.25rem; margin-bottom: 12px; letter-spacing: -0.01em; }
+  .scope-note p { color: var(--flash-dim); font-size: 0.95rem; line-height: 1.6; max-width: 680px; margin-bottom: 12px; }
+  .scope-note .chain { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 18px; font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; color: var(--flash-dim); }
+  .scope-note .chain .step { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 8px 12px; }
+  .scope-note .chain .arrow { color: var(--orange); }
+  .scope-note .callout { border-left: 3px solid var(--tier1); padding: 12px 16px; margin-top: 14px; background: rgba(110,171,198,0.06); border-radius: 0 8px 8px 0; color: var(--flash-dim); font-size: 0.9rem; }
+
   /* tier color accents */
   .tier-1 .feat { --tier-color: var(--tier1); }
   .tier-2 .feat { --tier-color: var(--tier2); }
@@ -179,6 +188,31 @@
       <div class="guide-card reveal" style="animation-delay:0.22s"><div class="guide-dot" style="background:var(--tier4)"></div><div class="t">Tier 4</div><div class="d">UI / architecture touch</div></div>
       <div class="guide-card reveal" style="animation-delay:0.26s"><div class="guide-dot" style="background:var(--tier5)"></div><div class="t">Tier 5</div><div class="d">Major build</div></div>
       <div class="guide-card reveal" style="animation-delay:0.3s"><div class="guide-dot" style="background:var(--tier6)"></div><div class="t">Tier 6</div><div class="d">Architectural rework</div></div>
+    </div>
+  </section>
+
+  <!-- SCOPE NOTE: Mobile access -->
+  <section>
+    <div class="sec-label reveal">Cross-cutting scope</div>
+    <h2 class="reveal" style="animation-delay:0.05s">Mobile &amp; remote access.</h2>
+    <p class="sec-intro reveal" style="animation-delay:0.1s">A goal that spans tiers, not a single feature. Scoping it here so the dependency chain is explicit — it's what to build toward, not a checkbox.</p>
+
+    <div class="scope-note reveal" style="animation-delay:0.15s">
+      <h3>Why there's no SSH shortcut</h3>
+      <p>Reference tools like <code>herdr</code> get phone access cheaply: they're TUI apps, so SSH into the host and the text grid renders on the phone terminal. Flare can't do that — it's a GPU-rendered window (winit + OpenGL) that needs a display server and a graphics context, not a terminal stream. So for Flare, mobile access is the <strong>full</strong> client/server path: there is no 64-column TUI to fall back to over SSH.</p>
+      <div class="callout">Key takeaway: the server model (<a href="#tier-6">#46</a>) isn't an optional nice-to-have for mobile — it's load-bearing. Without it, the window closing kills every running agent and there's nothing for a phone to reach.</div>
+
+      <h3 style="margin-top:24px">The dependency chain</h3>
+      <div class="chain">
+        <span class="step">#33 JSON socket API</span>
+        <span class="arrow">→</span>
+        <span class="step">#46 Detach / reattach server</span>
+        <span class="arrow">→</span>
+        <span class="step">#45 Mobile / compact layout</span>
+        <span class="arrow">→</span>
+        <span class="step">phone / web client</span>
+      </div>
+      <p style="margin-top:16px"><code>#33</code> defines the wire protocol a remote client speaks; <code>#46</code> splits the PTY/process owner from the UI so a client elsewhere can reattach; <code>#45</code> lays out a small screen once there's a surface to lay out. The actual phone/web client isn't on the roadmap yet — it emerges from these.</p>
     </div>
   </section>
 
@@ -335,7 +369,7 @@
 
         <div class="feat reveal"><div class="feat-num">44</div><h3>Theme passthrough</h3><p>Forward the host terminal's color scheme (OSC 10/11) so Flare matches the surrounding environment.</p><div class="feat-tags"><span class="tag">theme</span><span class="tag">osc</span></div></div>
 
-        <div class="feat reveal"><div class="feat-num">45</div><h3>Compact / mobile layout</h3><p>A layout mode for small screens — a header + switcher instead of a full sidebar.</p><div class="feat-tags"><span class="tag">ui</span><span class="tag">responsive</span></div></div>
+        <div class="feat reveal"><div class="feat-num">45</div><h3>Compact / mobile layout</h3><p>A layout mode for small screens — a header + switcher instead of a full sidebar. Part of the mobile-access chain — meaningful once a remote client surface exists (#46).</p><div class="feat-tags"><span class="tag">ui</span><span class="tag">responsive</span></div></div>
 
       </div>
     </div>
@@ -350,7 +384,7 @@
       <p class="tier-desc">The deepest changes. These reshape how Flare is structured and unlock capabilities nothing else can. Approach with a dedicated plan.</p>
       <div class="feat-grid">
 
-        <div class="feat reveal"><div class="feat-num">46</div><h3>Detach / reattach (server model)</h3><p>Split Flare into a background server (owns the PTYs and processes) and a thin UI client. Closing the window no longer kills agents — you reattach later and everything's still alive. The defining tmux-class capability.</p><div class="feat-tags"><span class="tag">architecture</span><span class="tag hot">defining</span></div></div>
+        <div class="feat reveal"><div class="feat-num">46</div><h3>Detach / reattach (server model)</h3><p>Split Flare into a background server (owns the PTYs and processes) and a thin UI client. Closing the window no longer kills agents — you reattach later and everything's still alive. The defining tmux-class capability. <strong>Load-bearing for mobile/remote access</strong> — see the scope note above.</p><div class="feat-tags"><span class="tag">architecture</span><span class="tag hot">defining</span></div></div>
 
         <div class="feat reveal"><div class="feat-num">47</div><h3>Live handoff</h3><p>Transfer live PTY file descriptors to a replacement process during updates — agents keep running with no restart needed across Flare upgrades.</p><div class="feat-tags"><span class="tag">architecture</span><span class="tag">reliability</span></div></div>
 
