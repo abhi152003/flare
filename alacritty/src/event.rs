@@ -45,7 +45,7 @@ use alacritty_terminal::term::{self, ClipboardType, Term, TermMode};
 use alacritty_terminal::vte::ansi::NamedColor;
 
 #[cfg(unix)]
-use crate::cli::{IpcConfig, ParsedOptions};
+use crate::cli::{IpcConfig, NewPaneOptions, ParsedOptions};
 use crate::cli::{Options as CliOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::ui_config::{HintAction, HintInternalAction};
@@ -208,6 +208,21 @@ impl Processor {
 
     fn restore_enabled(&self) -> bool {
         self.config.session.restore && !self.cli_options.no_restore
+    }
+
+    /// Route an IPC `new-pane` request to the target window and split its active pane.
+    #[cfg(unix)]
+    fn new_pane_from_ipc(
+        &mut self,
+        options: &NewPaneOptions,
+    ) -> Option<crate::pane_address::PaneAddress> {
+        // Target the requested window number, or the first-created window by default.
+        let window = if let Some(window_number) = options.window {
+            self.windows.values_mut().find(|wc| wc.window_number == window_number)?
+        } else {
+            self.windows.values_mut().min_by_key(|wc| wc.window_number)?
+        };
+        window.create_ipc_pane(&self.proxy, &options.terminal_options)
     }
 
     /// Resolve a pane address across all windows, `0` window matching any window.
@@ -489,6 +504,46 @@ impl ApplicationHandler<Event> for Processor {
                     ipc::send_reply(&mut stream, SocketReply::ListPanes(reply));
                 }
             },
+            // Focus a pane by its stable address.
+            #[cfg(unix)]
+            (EventType::IpcFocusPane(stream, address), _) => {
+                let reply = match address.parse::<crate::pane_address::PaneAddress>() {
+                    Ok(addr) => {
+                        let mut windows: Vec<&mut WindowContext> =
+                            self.windows.values_mut().collect();
+                        if addr.window != 0 {
+                            windows.retain(|wc| wc.window_number == addr.window);
+                        }
+                        let focused = windows
+                            .iter_mut()
+                            .find_map(|wc| wc.focus_pane_by_address(&addr).then_some(wc.window_number));
+                        match focused {
+                            Some(window_number) => format!(
+                                "focused {}",
+                                crate::pane_address::PaneAddress::new(window_number, addr.pane)
+                            ),
+                            None => format!("error: no pane with address {addr}"),
+                        }
+                    },
+                    Err(_) => format!(
+                        "error: invalid pane address {address:?} (expected e.g. w1:p3)"
+                    ),
+                };
+                if let Ok(mut stream) = stream.try_clone() {
+                    ipc::send_reply(&mut stream, SocketReply::FocusPane(reply));
+                }
+            },
+            // Create a new pane in a window.
+            #[cfg(unix)]
+            (EventType::IpcNewPane(stream, options), _) => {
+                let reply = match self.new_pane_from_ipc(&options) {
+                    Some(address) => address.to_string(),
+                    None => "error: could not create pane".to_string(),
+                };
+                if let Ok(mut stream) = stream.try_clone() {
+                    ipc::send_reply(&mut stream, SocketReply::NewPane(reply));
+                }
+            },
             // Fetch a pane's output as plain text.
             #[cfg(unix)]
             (EventType::IpcPaneOutput(stream, options), _) => {
@@ -760,6 +815,10 @@ pub enum EventType {
     IpcGetConfig(Arc<UnixStream>),
     #[cfg(unix)]
     IpcListPanes(Arc<UnixStream>, bool),
+    #[cfg(unix)]
+    IpcFocusPane(Arc<UnixStream>, String),
+    #[cfg(unix)]
+    IpcNewPane(Arc<UnixStream>, crate::cli::NewPaneOptions),
     #[cfg(unix)]
     IpcPaneOutput(Arc<UnixStream>, crate::cli::PaneOutputOptions),
     #[cfg(unix)]
@@ -2273,6 +2332,8 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                 EventType::IpcConfig(_)
                 | EventType::IpcGetConfig(..)
                 | EventType::IpcListPanes(..)
+                | EventType::IpcFocusPane(..)
+                | EventType::IpcNewPane(..)
                 | EventType::IpcPaneOutput(..)
                 | EventType::IpcPaneInfo(..)
                 | EventType::Shutdown => (),

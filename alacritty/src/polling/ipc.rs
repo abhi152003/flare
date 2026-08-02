@@ -90,6 +90,15 @@ impl IpcListener {
                     Event::new(EventType::IpcListPanes(Arc::new(stream), options.json), None);
                 let _ = self.event_proxy.send_event(event);
             },
+            SocketMessage::FocusPane(options) => {
+                let event =
+                    Event::new(EventType::IpcFocusPane(Arc::new(stream), options.address), None);
+                let _ = self.event_proxy.send_event(event);
+            },
+            SocketMessage::NewPane(options) => {
+                let event = Event::new(EventType::IpcNewPane(Arc::new(stream), options), None);
+                let _ = self.event_proxy.send_event(event);
+            },
             SocketMessage::PaneOutput(options) => {
                 let event =
                     Event::new(EventType::IpcPaneOutput(Arc::new(stream), options), None);
@@ -144,10 +153,22 @@ fn handle_reply(stream: &UnixStream, message: &SocketMessage) -> IoResult<()> {
             println!("{config}");
             Ok(())
         },
+        // Write the pane listing to STDOUT.
         (SocketMessage::ListPanes(..), SocketReply::ListPanes(lines)) => {
             println!("{lines}");
             Ok(())
         },
+        // Write the focus outcome to STDOUT.
+        (SocketMessage::FocusPane(..), SocketReply::FocusPane(message)) => {
+            println!("{message}");
+            Ok(())
+        },
+        // Write the new pane address to STDOUT.
+        (SocketMessage::NewPane(..), SocketReply::NewPane(message)) => {
+            println!("{message}");
+            Ok(())
+        },
+        // Write the pane output to STDOUT.
         (SocketMessage::PaneOutput(..), SocketReply::PaneOutput(output)) => {
             print!("{output}");
             if !output.ends_with('\n') {
@@ -155,6 +176,7 @@ fn handle_reply(stream: &UnixStream, message: &SocketMessage) -> IoResult<()> {
             }
             Ok(())
         },
+        // Write the pane metadata to STDOUT.
         (SocketMessage::PaneInfo(..), SocketReply::PaneInfo(info)) => {
             println!("{info}");
             Ok(())
@@ -267,6 +289,10 @@ pub enum SocketReply {
     GetConfig(String),
     /// Multi-line pane listing (one `wN:pM` line per pane).
     ListPanes(String),
+    /// Outcome message for focus requests (address or error).
+    FocusPane(String),
+    /// Address of the created pane, or an error message.
+    NewPane(String),
     /// A pane's output as plain text, or an error message.
     PaneOutput(String),
     /// A pane's metadata as JSON, or an error message.

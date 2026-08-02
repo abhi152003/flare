@@ -44,15 +44,17 @@ complete -c alacritty -n "__fish_alacritty_needs_command" -s V -l version -d 'Pr
 complete -c alacritty -n "__fish_alacritty_needs_command" -f -a "msg" -d 'Send a message to the Alacritty socket'
 complete -c alacritty -n "__fish_alacritty_needs_command" -f -a "migrate" -d 'Migrate the configuration file'
 complete -c alacritty -n "__fish_alacritty_needs_command" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -s s -l socket -d 'IPC socket connection path override' -r -F
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -s h -l help -d 'Print help'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -f -a "create-window" -d 'Create a new window in the same Alacritty process'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -f -a "config" -d 'Update the Alacritty configuration'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -f -a "get-config" -d 'Read runtime Alacritty configuration'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -f -a "list-panes" -d 'List all panes across windows'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -f -a "pane-output" -d 'Fetch the last lines of a pane\'s output as plain text'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -f -a "pane-info" -d 'Fetch a pane\'s metadata as JSON'
-complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes pane-output pane-info help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -s s -l socket -d 'IPC socket connection path override' -r -F
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -s h -l help -d 'Print help'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "create-window" -d 'Create a new window in the same Alacritty process'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "config" -d 'Update the Alacritty configuration'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "get-config" -d 'Read runtime Alacritty configuration'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "list-panes" -d 'List all panes across windows'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "focus-pane" -d 'Focus a pane by its stable address (e.g. `w1:p3`; bare `p3` matches any window)'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "new-pane" -d 'Create a new pane in an existing window'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "pane-output" -d 'Fetch the last lines of a pane\'s output as plain text'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "pane-info" -d 'Fetch a pane\'s metadata as JSON'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and not __fish_seen_subcommand_from create-window config get-config list-panes focus-pane new-pane pane-output pane-info help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from create-window" -l working-directory -d 'Start the shell in the specified working directory' -r -F
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from create-window" -s e -l command -d 'Command and args to execute (must be last argument)' -r
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from create-window" -s T -l title -d 'Defines the window title [default: Alacritty]' -r
@@ -67,6 +69,12 @@ complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from get-config" -s h -l help -d 'Print help (see more with \'--help\')'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from list-panes" -l json -d 'Output the listing as a JSON array'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from list-panes" -s h -l help -d 'Print help'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from focus-pane" -s h -l help -d 'Print help'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from new-pane" -l window -d 'Window to create the pane in (defaults to the first window)' -r
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from new-pane" -l working-directory -d 'Start the shell in the specified working directory' -r -F
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from new-pane" -s e -l command -d 'Command and args to execute (must be last argument)' -r
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from new-pane" -l hold -d 'Remain open after child process exit'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from new-pane" -s h -l help -d 'Print help'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from pane-output" -l lines -d 'Maximum number of lines to fetch' -r
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from pane-output" -s h -l help -d 'Print help'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from pane-info" -s h -l help -d 'Print help'
@@ -74,6 +82,8 @@ complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "config" -d 'Update the Alacritty configuration'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "get-config" -d 'Read runtime Alacritty configuration'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "list-panes" -d 'List all panes across windows'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "focus-pane" -d 'Focus a pane by its stable address (e.g. `w1:p3`; bare `p3` matches any window)'
+complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "new-pane" -d 'Create a new pane in an existing window'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "pane-output" -d 'Fetch the last lines of a pane\'s output as plain text'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "pane-info" -d 'Fetch a pane\'s metadata as JSON'
 complete -c alacritty -n "__fish_alacritty_using_subcommand msg; and __fish_seen_subcommand_from help" -f -a "help" -d 'Print this message or the help of the given subcommand(s)'
@@ -90,5 +100,7 @@ complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_see
 complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "config" -d 'Update the Alacritty configuration'
 complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "get-config" -d 'Read runtime Alacritty configuration'
 complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "list-panes" -d 'List all panes across windows'
+complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "focus-pane" -d 'Focus a pane by its stable address (e.g. `w1:p3`; bare `p3` matches any window)'
+complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "new-pane" -d 'Create a new pane in an existing window'
 complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "pane-output" -d 'Fetch the last lines of a pane\'s output as plain text'
 complete -c alacritty -n "__fish_alacritty_using_subcommand help; and __fish_seen_subcommand_from msg" -f -a "pane-info" -d 'Fetch a pane\'s metadata as JSON'

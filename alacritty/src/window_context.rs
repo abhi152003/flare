@@ -31,8 +31,9 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::test::TermSize;
 use alacritty_terminal::term::{Term, TermMode};
 use alacritty_terminal::tty;
+use alacritty_terminal::tty::Options as PtyOptions;
 
-use crate::cli::{ParsedOptions, WindowOptions};
+use crate::cli::{ParsedOptions, TerminalOptions, WindowOptions};
 use crate::clipboard::Clipboard;
 use crate::config::UiConfig;
 use crate::config::window::Decorations;
@@ -1483,6 +1484,32 @@ impl WindowContext {
         if let Some(cwd) = cwd {
             pty_config.working_directory = Some(cwd);
         }
+        self.create_pane_with_pty(proxy, requested_id, pty_config)
+    }
+
+    /// Create a pane from an IPC request: applies CLI working-directory/command overrides and
+    /// splits the active pane, returning the new pane's stable address (#34).
+    pub fn create_ipc_pane(
+        &mut self,
+        proxy: &EventLoopProxy<Event>,
+        options: &TerminalOptions,
+    ) -> Option<crate::pane_address::PaneAddress> {
+        let mut pty_config = self.config.pty_config();
+        options.override_pty_config(&mut pty_config);
+
+        let new_pane = self.create_pane_with_pty(proxy, 0, pty_config)?;
+        let viewport = self.full_pane_viewport();
+        self.tab_manager.active_tab_mut().root.split(tab::SplitDirection::Vertical, new_pane, viewport);
+        self.activate_current_pane(proxy);
+        Some(self.active_pane_address())
+    }
+
+    fn create_pane_with_pty(
+        &self,
+        proxy: &EventLoopProxy<Event>,
+        requested_id: u64,
+        pty_config: PtyOptions,
+    ) -> Option<tab::Pane> {
         let event_proxy = EventProxy::new(proxy.clone(), self.display.window.id());
 
         let terminal =
@@ -1687,8 +1714,6 @@ impl WindowContext {
     }
 
     /// Address of the currently focused pane, e.g. `w1:p3` (#28).
-    // Consumed by the JSON socket (#33) and CLI pane control (#34).
-    #[allow(dead_code)]
     pub fn active_pane_address(&self) -> crate::pane_address::PaneAddress {
         let pane = self.tab_manager.active_tab().root.active_pane();
         crate::pane_address::PaneAddress::new(self.window_number, pane.id)
@@ -1728,8 +1753,6 @@ impl WindowContext {
     }
 
     /// Find a pane by its durable id in any tab of this window.
-    // Consumed by the JSON socket (#33) and CLI pane control (#34).
-    #[allow(dead_code)]
     pub fn pane_for_address(&self, address: &crate::pane_address::PaneAddress) -> Option<&Pane> {
         if address.window != 0 && address.window != self.window_number {
             return None;
@@ -1742,8 +1765,6 @@ impl WindowContext {
     /// Focus the pane with the given durable id, activating its tab if needed.
     ///
     /// Returns `false` when no pane in this window has that id.
-    // Consumed by the JSON socket (#33) and CLI pane control (#34).
-    #[allow(dead_code)]
     pub fn focus_pane_by_address(&mut self, address: &crate::pane_address::PaneAddress) -> bool {
         if address.window != 0 && address.window != self.window_number {
             return false;

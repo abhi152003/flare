@@ -40,11 +40,17 @@ _alacritty() {
             alacritty__help__msg,create-window)
                 cmd="alacritty__help__msg__create__window"
                 ;;
+            alacritty__help__msg,focus-pane)
+                cmd="alacritty__help__msg__focus__pane"
+                ;;
             alacritty__help__msg,get-config)
                 cmd="alacritty__help__msg__get__config"
                 ;;
             alacritty__help__msg,list-panes)
                 cmd="alacritty__help__msg__list__panes"
+                ;;
+            alacritty__help__msg,new-pane)
+                cmd="alacritty__help__msg__new__pane"
                 ;;
             alacritty__help__msg,pane-info)
                 cmd="alacritty__help__msg__pane__info"
@@ -58,6 +64,9 @@ _alacritty() {
             alacritty__msg,create-window)
                 cmd="alacritty__msg__create__window"
                 ;;
+            alacritty__msg,focus-pane)
+                cmd="alacritty__msg__focus__pane"
+                ;;
             alacritty__msg,get-config)
                 cmd="alacritty__msg__get__config"
                 ;;
@@ -66,6 +75,9 @@ _alacritty() {
                 ;;
             alacritty__msg,list-panes)
                 cmd="alacritty__msg__list__panes"
+                ;;
+            alacritty__msg,new-pane)
+                cmd="alacritty__msg__new__pane"
                 ;;
             alacritty__msg,pane-info)
                 cmd="alacritty__msg__pane__info"
@@ -79,6 +91,9 @@ _alacritty() {
             alacritty__msg__help,create-window)
                 cmd="alacritty__msg__help__create__window"
                 ;;
+            alacritty__msg__help,focus-pane)
+                cmd="alacritty__msg__help__focus__pane"
+                ;;
             alacritty__msg__help,get-config)
                 cmd="alacritty__msg__help__get__config"
                 ;;
@@ -87,6 +102,9 @@ _alacritty() {
                 ;;
             alacritty__msg__help,list-panes)
                 cmd="alacritty__msg__help__list__panes"
+                ;;
+            alacritty__msg__help,new-pane)
+                cmd="alacritty__msg__help__new__pane"
                 ;;
             alacritty__msg__help,pane-info)
                 cmd="alacritty__msg__help__pane__info"
@@ -234,7 +252,7 @@ _alacritty() {
             return 0
             ;;
         alacritty__help__msg)
-            opts="create-window config get-config list-panes pane-output pane-info"
+            opts="create-window config get-config list-panes focus-pane new-pane pane-output pane-info"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -275,6 +293,20 @@ _alacritty() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        alacritty__help__msg__focus__pane)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         alacritty__help__msg__get__config)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -290,6 +322,20 @@ _alacritty() {
             return 0
             ;;
         alacritty__help__msg__list__panes)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        alacritty__help__msg__new__pane)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -376,7 +422,7 @@ _alacritty() {
             return 0
             ;;
         alacritty__msg)
-            opts="-s -h --socket --help create-window config get-config list-panes pane-output pane-info help"
+            opts="-s -h --socket --help create-window config get-config list-panes focus-pane new-pane pane-output pane-info help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 2 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -498,6 +544,20 @@ _alacritty() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        alacritty__msg__focus__pane)
+            opts="-h --help <ADDRESS>"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         alacritty__msg__get__config)
             opts="-w -h --window-id --help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
@@ -521,7 +581,7 @@ _alacritty() {
             return 0
             ;;
         alacritty__msg__help)
-            opts="create-window config get-config list-panes pane-output pane-info help"
+            opts="create-window config get-config list-panes focus-pane new-pane pane-output pane-info help"
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
                 return 0
@@ -549,6 +609,20 @@ _alacritty() {
             return 0
             ;;
         alacritty__msg__help__create__window)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        alacritty__msg__help__focus__pane)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
                 COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
@@ -604,6 +678,20 @@ _alacritty() {
             COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
             return 0
             ;;
+        alacritty__msg__help__new__pane)
+            opts=""
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
         alacritty__msg__help__pane__info)
             opts=""
             if [[ ${cur} == -* || ${COMP_CWORD} -eq 4 ]] ; then
@@ -639,6 +727,47 @@ _alacritty() {
                 return 0
             fi
             case "${prev}" in
+                *)
+                    COMPREPLY=()
+                    ;;
+            esac
+            COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+            return 0
+            ;;
+        alacritty__msg__new__pane)
+            opts="-e -h --window --working-directory --hold --command --help"
+            if [[ ${cur} == -* || ${COMP_CWORD} -eq 3 ]] ; then
+                COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
+                return 0
+            fi
+            case "${prev}" in
+                --window)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                --working-directory)
+                    local oldifs
+                    if [ -n "${IFS+x}" ]; then
+                        oldifs="$IFS"
+                    fi
+                    IFS=$'\n'
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    if [ -n "${oldifs+x}" ]; then
+                        IFS="$oldifs"
+                    fi
+                    if [[ "${BASH_VERSINFO[0]}" -ge 4 ]]; then
+                        compopt -o filenames
+                    fi
+                    return 0
+                    ;;
+                --command)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
+                -e)
+                    COMPREPLY=($(compgen -f "${cur}"))
+                    return 0
+                    ;;
                 *)
                     COMPREPLY=()
                     ;;

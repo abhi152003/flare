@@ -103,6 +103,24 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help]' \
 && ret=0
 ;;
+(focus-pane)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':address -- Pane address to focus, e.g. `w1\:p3` (bare `p3` matches any window):_default' \
+&& ret=0
+;;
+(new-pane)
+_arguments "${_arguments_options[@]}" : \
+'--window=[Window to create the pane in (defaults to the first window)]:WINDOW:_default' \
+'--working-directory=[Start the shell in the specified working directory]:WORKING_DIRECTORY:_files' \
+'*-e+[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'*--command=[Command and args to execute (must be last argument)]:COMMAND:_default' \
+'--hold[Remain open after child process exit]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
 (pane-output)
 _arguments "${_arguments_options[@]}" : \
 '--lines=[Maximum number of lines to fetch]:LINES:_default' \
@@ -143,6 +161,14 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (list-panes)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(focus-pane)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(new-pane)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -221,6 +247,14 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(focus-pane)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(new-pane)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
 (pane-output)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
@@ -285,6 +319,8 @@ _alacritty__help__msg_commands() {
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
 'list-panes:List all panes across windows' \
+'focus-pane:Focus a pane by its stable address (e.g. \`w1\:p3\`; bare \`p3\` matches any window)' \
+'new-pane:Create a new pane in an existing window' \
 'pane-output:Fetch the last lines of a pane'\''s output as plain text' \
 'pane-info:Fetch a pane'\''s metadata as JSON' \
     )
@@ -300,6 +336,11 @@ _alacritty__help__msg__create-window_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty help msg create-window commands' commands "$@"
 }
+(( $+functions[_alacritty__help__msg__focus-pane_commands] )) ||
+_alacritty__help__msg__focus-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg focus-pane commands' commands "$@"
+}
 (( $+functions[_alacritty__help__msg__get-config_commands] )) ||
 _alacritty__help__msg__get-config_commands() {
     local commands; commands=()
@@ -309,6 +350,11 @@ _alacritty__help__msg__get-config_commands() {
 _alacritty__help__msg__list-panes_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty help msg list-panes commands' commands "$@"
+}
+(( $+functions[_alacritty__help__msg__new-pane_commands] )) ||
+_alacritty__help__msg__new-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg new-pane commands' commands "$@"
 }
 (( $+functions[_alacritty__help__msg__pane-info_commands] )) ||
 _alacritty__help__msg__pane-info_commands() {
@@ -332,6 +378,8 @@ _alacritty__msg_commands() {
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
 'list-panes:List all panes across windows' \
+'focus-pane:Focus a pane by its stable address (e.g. \`w1\:p3\`; bare \`p3\` matches any window)' \
+'new-pane:Create a new pane in an existing window' \
 'pane-output:Fetch the last lines of a pane'\''s output as plain text' \
 'pane-info:Fetch a pane'\''s metadata as JSON' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -348,6 +396,11 @@ _alacritty__msg__create-window_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg create-window commands' commands "$@"
 }
+(( $+functions[_alacritty__msg__focus-pane_commands] )) ||
+_alacritty__msg__focus-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg focus-pane commands' commands "$@"
+}
 (( $+functions[_alacritty__msg__get-config_commands] )) ||
 _alacritty__msg__get-config_commands() {
     local commands; commands=()
@@ -360,6 +413,8 @@ _alacritty__msg__help_commands() {
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
 'list-panes:List all panes across windows' \
+'focus-pane:Focus a pane by its stable address (e.g. \`w1\:p3\`; bare \`p3\` matches any window)' \
+'new-pane:Create a new pane in an existing window' \
 'pane-output:Fetch the last lines of a pane'\''s output as plain text' \
 'pane-info:Fetch a pane'\''s metadata as JSON' \
 'help:Print this message or the help of the given subcommand(s)' \
@@ -376,6 +431,11 @@ _alacritty__msg__help__create-window_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg help create-window commands' commands "$@"
 }
+(( $+functions[_alacritty__msg__help__focus-pane_commands] )) ||
+_alacritty__msg__help__focus-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help focus-pane commands' commands "$@"
+}
 (( $+functions[_alacritty__msg__help__get-config_commands] )) ||
 _alacritty__msg__help__get-config_commands() {
     local commands; commands=()
@@ -391,6 +451,11 @@ _alacritty__msg__help__list-panes_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg help list-panes commands' commands "$@"
 }
+(( $+functions[_alacritty__msg__help__new-pane_commands] )) ||
+_alacritty__msg__help__new-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help new-pane commands' commands "$@"
+}
 (( $+functions[_alacritty__msg__help__pane-info_commands] )) ||
 _alacritty__msg__help__pane-info_commands() {
     local commands; commands=()
@@ -405,6 +470,11 @@ _alacritty__msg__help__pane-output_commands() {
 _alacritty__msg__list-panes_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg list-panes commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__new-pane_commands] )) ||
+_alacritty__msg__new-pane_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg new-pane commands' commands "$@"
 }
 (( $+functions[_alacritty__msg__pane-info_commands] )) ||
 _alacritty__msg__pane-info_commands() {

@@ -273,6 +273,12 @@ pub enum SocketMessage {
     /// List all panes across windows.
     ListPanes(ListPanesOptions),
 
+    /// Focus a pane by its stable address (e.g. `w1:p3`; bare `p3` matches any window).
+    FocusPane(FocusPaneOptions),
+
+    /// Create a new pane in an existing window.
+    NewPane(NewPaneOptions),
+
     /// Fetch the last lines of a pane's output as plain text.
     PaneOutput(PaneOutputOptions),
 
@@ -287,6 +293,14 @@ pub struct ListPanesOptions {
     /// Output the listing as a JSON array.
     #[clap(long)]
     pub json: bool,
+}
+
+/// Options for focusing a pane.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Debug, Clone, PartialEq, Eq)]
+pub struct FocusPaneOptions {
+    /// Pane address to focus, e.g. `w1:p3` (bare `p3` matches any window).
+    pub address: String,
 }
 
 /// Options for fetching a pane's output.
@@ -307,6 +321,19 @@ pub struct PaneOutputOptions {
 pub struct PaneInfoOptions {
     /// Pane address to inspect, e.g. `w1:p3` (bare `p3` matches any window).
     pub address: String,
+}
+
+/// Options for creating a new pane.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Debug, Clone, PartialEq, Eq)]
+pub struct NewPaneOptions {
+    /// Window to create the pane in (defaults to the first window).
+    #[clap(long)]
+    pub window: Option<u64>,
+
+    /// Terminal options (working directory, command) for the new pane.
+    #[clap(flatten)]
+    pub terminal_options: TerminalOptions,
 }
 
 /// Migrate the configuration file.
@@ -609,4 +636,3 @@ mod tests {
         // clap_complete::generate(Shell::Zsh, &mut clap, "alacritty", &mut file);
     }
 }
-
