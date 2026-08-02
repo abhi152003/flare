@@ -861,7 +861,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
-        tab_bar_info: Option<(&[tab::TabBarEntry], usize)>,
+        tab_bar_info: Option<(&[tab::TabBarEntry], usize, tab::TabFilter)>,
         close_button_hovered: bool,
         palette: &crate::palette::PaletteState,
     ) {
@@ -1068,7 +1068,8 @@ impl Display {
 
             // When tabs are visible, draw close button in the tab bar area.
             // Otherwise, draw it at grid row 0.
-            let tabs_visible = tab_bar_info.is_some_and(|(titles, _)| titles.len() > 1);
+            let tabs_visible =
+                tab_bar_info.is_some_and(|(titles, _, f)| titles.len() > 1 || f.label().is_some());
 
             if tabs_visible {
                 // Multi-tab close button background is added in the tab-bar rect pass so it is
@@ -1106,8 +1107,8 @@ impl Display {
         }
 
         // Draw tab bar if there are multiple tabs.
-        if let Some((tab_titles, active_index)) = tab_bar_info {
-            if tab_titles.len() > 1 {
+        if let Some((tab_titles, active_index, filter)) = tab_bar_info {
+            if tab_titles.len() > 1 || filter.label().is_some() {
                 let tab_config = &config.window.tab_bar;
                 let tab_bar_height = effective_tab_bar_height(config, size_info.cell_height());
                 let y = 0.;
@@ -1156,12 +1157,14 @@ impl Display {
                     ));
 
                     // Agent status dot: a small colored square at the left edge of the pill,
-                    // vertically centered. Color keyed by agent kind (see AgentKind::color).
+                    // vertically centered. Color keyed by agent kind × status (Working = bright,
+                    // Idle = dimmed) — see AgentStatus::color.
                     if let Some(agent) = entry.agent {
+                        let status = entry.agent_status.unwrap_or_default();
                         let dot_size = (tab_rect_height - 8.0).max(6.0).min(10.0);
                         let dot_x = tab_x + 6.0;
                         let dot_y = tab_rect_y + (tab_rect_height - dot_size) / 2.0;
-                        rects.push(RenderRect::new(dot_x, dot_y, dot_size, dot_size, agent.color(), 1.));
+                        rects.push(RenderRect::new(dot_x, dot_y, dot_size, dot_size, status.color(agent), 1.));
                     }
 
                     let max_chars = (tab_width / size_info.cell_width()) as usize;
@@ -1245,8 +1248,8 @@ impl Display {
             self.renderer.draw_rects(&size_info, &metrics, rects);
         }
 
-        if let Some((tab_titles, active_index)) =
-            tab_bar_info.filter(|(titles, _)| titles.len() > 1)
+        if let Some((tab_titles, active_index, filter)) =
+            tab_bar_info.filter(|(titles, _, f)| titles.len() > 1 || f.label().is_some())
         {
             let glyph_cache = &mut self.glyph_cache;
             let tab_config = &config.window.tab_bar;
@@ -1266,6 +1269,26 @@ impl Display {
                     .max(size_info.cell_width() * tab_count as f32);
             let tab_width = available_width / tab_count as f32;
             let tab_text_size_info = size_info.with_tab_bar_offset(0.0);
+
+            // Render the active filter label (#16), if any, at the far right of the
+            // tab bar in a muted accent color.
+            if let Some(label) = filter.label() {
+                let label_str = format!("[{}]", label);
+                let label_pixel_width = label_str.len() as f32 * size_info.cell_width();
+                let label_x = tab_end_x - label_pixel_width;
+                let label_col =
+                    ((label_x - tab_text_size_info.padding_x()) / size_info.cell_width()).ceil()
+                        as usize;
+                let point = Point::new(0, Column(label_col));
+                self.renderer.draw_string(
+                    point,
+                    tab_config.active_color,
+                    config.colors.primary.background,
+                    label_str.chars(),
+                    &tab_text_size_info,
+                    glyph_cache,
+                );
+            }
 
             for (i, entry) in tab_titles.iter().enumerate() {
                 let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);
@@ -1382,7 +1405,7 @@ impl Display {
         message_buffer: &MessageBuffer,
         config: &UiConfig,
         search_state: &mut SearchState,
-        tab_bar_info: Option<(&[tab::TabBarEntry], usize)>,
+        tab_bar_info: Option<(&[tab::TabBarEntry], usize, tab::TabFilter)>,
         close_button_hovered: bool,
         palette: &crate::palette::PaletteState,
     ) {
@@ -1551,14 +1574,15 @@ impl Display {
         self.renderer.set_viewport(&size_info);
 
         // Draw tab bar.
-        if let Some((tab_titles, active_index)) = tab_bar_info {
-            if tab_titles.len() > 1 {
+        if let Some((tab_titles, active_index, filter)) = tab_bar_info {
+            if tab_titles.len() > 1 || filter.label().is_some() {
                 self.draw_tab_bar(
                     config,
                     &size_info,
                     &metrics,
                     tab_titles,
                     active_index,
+                    filter,
                     close_button_hovered,
                 );
             }
@@ -1717,6 +1741,7 @@ impl Display {
         metrics: &crossfont::Metrics,
         tab_titles: &[tab::TabBarEntry],
         active_index: usize,
+        filter: tab::TabFilter,
         close_button_hovered: bool,
     ) {
         let tab_config = &config.window.tab_bar;
@@ -1764,12 +1789,14 @@ impl Display {
             ));
 
             // Agent status dot: a small colored square at the left edge of the pill,
-            // vertically centered. Color keyed by agent kind (see AgentKind::color).
+            // vertically centered. Color keyed by agent kind × status (Working = bright,
+            // Idle = dimmed) — see AgentStatus::color.
             if let Some(agent) = entry.agent {
+                let status = entry.agent_status.unwrap_or_default();
                 let dot_size = (tab_rect_height - 8.0).max(6.0).min(10.0);
                 let dot_x = tab_x + 6.0;
                 let dot_y = tab_rect_y + (tab_rect_height - dot_size) / 2.0;
-                tab_rects.push(RenderRect::new(dot_x, dot_y, dot_size, dot_size, agent.color(), 1.));
+                tab_rects.push(RenderRect::new(dot_x, dot_y, dot_size, dot_size, status.color(agent), 1.));
             }
         }
 
@@ -1798,6 +1825,25 @@ impl Display {
         // Draw tab title text.
         let glyph_cache = &mut self.glyph_cache;
         let tab_text_size_info = size_info.with_tab_bar_offset(0.0);
+
+        // Render the active filter label (#16), if any, at the far right of the
+        // tab bar in the accent color so it's clear a filter is on.
+        if let Some(label) = filter.label() {
+            let label_str = format!("[{}]", label);
+            let label_pixel_width = label_str.len() as f32 * size_info.cell_width();
+            let label_x = tab_end_x - label_pixel_width;
+            let label_col =
+                ((label_x - tab_text_size_info.padding_x()) / size_info.cell_width()).ceil() as usize;
+            let point = Point::new(0, Column(label_col));
+            self.renderer.draw_string(
+                point,
+                tab_config.active_color,
+                config.colors.primary.background,
+                label_str.chars(),
+                &tab_text_size_info,
+                glyph_cache,
+            );
+        }
 
         for (i, entry) in tab_titles.iter().enumerate() {
             let tab_x = tab_start_x + i as f32 * (tab_width + tab_padding);

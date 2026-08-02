@@ -805,6 +805,7 @@ pub enum TabAction {
     ResizePaneUp,
     ResizePaneDown,
     TogglePaneZoom,
+    CycleTabFilter,
 }
 
 pub struct ActionContext<'a, N, T> {
@@ -1717,6 +1718,10 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn toggle_pane_zoom(&mut self) {
         *self.pending_tab_action = Some(TabAction::TogglePaneZoom);
+    }
+
+    fn cycle_tab_filter(&mut self) {
+        *self.pending_tab_action = Some(TabAction::CycleTabFilter);
     }
 
     fn toggle_palette(&mut self) {

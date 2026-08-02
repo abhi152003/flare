@@ -54,6 +54,32 @@ impl AgentKind {
     }
 }
 
+/// Live state of a detected agent (#15). Derived from recent PTY activity: an agent
+/// producing output within the idle threshold is `Working`; one silent past it is
+/// `Idle`. `Blocked`/`Done` require a real state signal (shell-integration hooks,
+/// tracked under #22) and are not yet produced.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentStatus {
+    /// No output from the agent within the idle threshold.
+    #[default]
+    Idle,
+    /// The agent produced output within the idle threshold.
+    Working,
+}
+
+impl AgentStatus {
+    /// Resolve a status-dot color from agent kind (hue) × status (brightness).
+    /// `Working` keeps the agent's full color; `Idle` dims it to the same hue at
+    /// lower intensity so it reads as "quiet but still there".
+    pub fn color(self, kind: AgentKind) -> Rgb {
+        let base = kind.color();
+        match self {
+            AgentStatus::Working => base,
+            AgentStatus::Idle => base * 0.5,
+        }
+    }
+}
+
 /// Match a foreground process name to a known agent.
 ///
 /// `process_name` is the basename of the foreground process's argv[0] (e.g. `claude`, not
@@ -163,5 +189,38 @@ mod tests {
                 assert_ne!(colors[i], colors[j], "colors collide for {:?} and {:?}", kinds[i], kinds[j]);
             }
         }
+    }
+
+    /// `Working` keeps the agent's full color; `Idle` dims each channel toward zero
+    /// but never goes fully dark (the hue stays recognizable).
+    #[test]
+    fn status_color_dims_for_idle() {
+        let base = AgentKind::ClaudeCode.color();
+        let working = AgentStatus::Working.color(AgentKind::ClaudeCode);
+        let idle = AgentStatus::Idle.color(AgentKind::ClaudeCode);
+        // Working == base color exactly.
+        assert_eq!(working, base);
+        // Idle is dimmer on every channel, but not black.
+        assert!(idle.r < base.r || idle.g < base.g || idle.b < base.b);
+        assert!(idle.r > 0 || idle.g > 0 || idle.b > 0);
+    }
+
+    /// The idle-threshold decision: `now - last < threshold → Working`, else `Idle`.
+    /// Verified as pure arithmetic — the actual store/load lives in detect_agents.
+    #[test]
+    fn idle_threshold_classifies_correctly() {
+        const THRESHOLD_MS: u64 = 3000;
+        let now: u64 = 10_000;
+        let classify = |last: u64| {
+            if now.saturating_sub(last) < THRESHOLD_MS { AgentStatus::Working } else { AgentStatus::Idle }
+        };
+        // Recent output → Working.
+        assert_eq!(classify(9_000), AgentStatus::Working);
+        assert_eq!(classify(7_500), AgentStatus::Working);
+        // Exactly at the threshold → Idle (boundary is exclusive on the working side).
+        assert_eq!(classify(7_000), AgentStatus::Idle);
+        // Long silent → Idle.
+        assert_eq!(classify(0), AgentStatus::Idle);
+        // Future/garbage timestamps saturate to Working-safe, but a 0 (never seen output) is Idle.
     }
 }

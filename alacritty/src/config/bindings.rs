@@ -293,6 +293,9 @@ pub enum Action {
 
     /// Toggle pane zoom (expand active pane to fill the tab).
     TogglePaneZoom,
+
+    /// Cycle the tab-bar agent-status filter: All → Working → Idle → All (#16).
+    CycleTabFilter,
 }
 
 impl From<&'static str> for Action {
@@ -648,6 +651,9 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
 
         // Flare pane zoom keybinding.
         "z",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::TogglePaneZoom;
+
+        // Flare tab-bar agent-status filter keybinding (#16).
+        "a",    ModifiersState::CONTROL | ModifiersState::SHIFT;                 Action::CycleTabFilter;
     ));
 
     bindings

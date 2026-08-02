@@ -6,10 +6,11 @@ use std::fmt::{self, Display, Formatter};
 use std::fs::File;
 use std::io::{self, ErrorKind, Read, Write};
 use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use log::error;
 use polling::{Event as PollingEvent, Events, PollMode, Poller};
@@ -53,6 +54,10 @@ pub struct EventLoop<T: tty::EventedPty, U: EventListener> {
     event_proxy: U,
     drain_on_exit: bool,
     ref_test: bool,
+    /// Shared timestamp (millis since UNIX_EPOCH) of the last PTY output, written here
+    /// and read from the main thread to derive agent Working/Idle status (#15). `None`
+    /// for ref-test loops that have no owning pane.
+    last_output: Option<Arc<AtomicU64>>,
 }
 
 impl<T, U> EventLoop<T, U>
@@ -61,12 +66,17 @@ where
     U: EventListener + Send + 'static,
 {
     /// Create a new event loop.
+    ///
+    /// `last_output` is an optional shared timestamp the loop updates on each PTY
+    /// read so the main thread can derive agent Working/Idle status (#15). Pass
+    /// `None` for ref-test loops without an owning pane.
     pub fn new(
         terminal: Arc<FairMutex<Term<U>>>,
         event_proxy: U,
         pty: T,
         drain_on_exit: bool,
         ref_test: bool,
+        last_output: Option<Arc<AtomicU64>>,
     ) -> io::Result<EventLoop<T, U>> {
         let (tx, rx) = mpsc::channel();
         let poll = Poller::new()?.into();
@@ -79,6 +89,7 @@ where
             event_proxy,
             drain_on_exit,
             ref_test,
+            last_output,
         })
     }
 
@@ -171,6 +182,17 @@ where
         // Queue terminal redraw unless all processed bytes were synchronized.
         if state.parser.sync_bytes_count() < processed && processed > 0 {
             self.event_proxy.send_event(Event::Wakeup);
+        }
+
+        // Record the last-output timestamp for agent Working/Idle status (#15).
+        // Relaxed ordering suffices: the main thread only needs eventual visibility
+        // on its next 2s detection tick, with no ordering dependency on other memory.
+        if processed > 0 {
+            if let Some(last_output) = &self.last_output {
+                let millis =
+                    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0);
+                last_output.store(millis, Ordering::Relaxed);
+            }
         }
 
         Ok(())

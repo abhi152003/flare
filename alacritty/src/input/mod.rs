@@ -170,6 +170,8 @@ pub trait ActionContext<T: EventListener> {
     fn palette_state_mut(&mut self) -> Option<&mut crate::palette::PaletteState> { None }
     fn restore_session(&mut self, _session: crate::session::SessionState) {}
     fn toggle_pane_zoom(&mut self) {}
+
+    fn cycle_tab_filter(&mut self) {}
 }
 
 impl Action {
@@ -487,6 +489,7 @@ impl<T: EventListener> Execute<T> for Action {
             Action::ResizePaneDown => ctx.resize_pane_down(),
             Action::TogglePalette => ctx.toggle_palette(),
             Action::TogglePaneZoom => ctx.toggle_pane_zoom(),
+            Action::CycleTabFilter => ctx.cycle_tab_filter(),
             _ => (),
         }
     }

@@ -1,6 +1,7 @@
 //! Tab and pane management for Flare terminal.
 
 use std::fmt;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use alacritty_terminal::event_loop::Notifier;
@@ -199,6 +200,9 @@ impl PaneNode {
                     #[cfg(not(windows))]
                     shell_pid: pane.shell_pid,
                     agent: pane.agent,
+                    agent_status: pane.agent_status,
+                    // Keep the existing pane's timestamp continuity (shared Arc).
+                    last_output: pane.last_output.clone(),
                 };
                 *self = PaneNode::Split {
                     direction,
@@ -669,6 +673,12 @@ pub struct Pane {
     /// Detected AI agent running in this pane's foreground process, if any.
     /// Refreshed periodically by `WindowContext::detect_agents`.
     pub agent: Option<crate::agent::AgentKind>,
+    /// Live status of the detected agent (#15), derived from `last_output`.
+    /// Recomputed alongside `agent` by `detect_agents`.
+    pub agent_status: crate::agent::AgentStatus,
+    /// Last PTY output time (millis since UNIX_EPOCH), written by the PTY reader
+    /// thread via this shared atomic so the main thread can read it lock-free.
+    pub last_output: Arc<AtomicU64>,
 }
 
 impl fmt::Debug for Pane {
@@ -690,6 +700,7 @@ pub struct Tab {
 pub struct TabBarEntry {
     pub title: String,
     pub agent: Option<crate::agent::AgentKind>,
+    pub agent_status: Option<crate::agent::AgentStatus>,
 }
 
 impl Tab {
@@ -814,14 +825,70 @@ impl Tab {
 }
 
 /// Manages all tabs in a window.
+/// Tab-bar visibility filter keyed by the active pane's agent status (#16).
+/// A view filter — hidden tabs keep running; switching to them still works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TabFilter {
+    /// No filtering — all tabs visible.
+    #[default]
+    All,
+    /// Only tabs whose active agent is producing output.
+    Working,
+    /// Only tabs whose active agent has gone quiet.
+    Idle,
+}
+
+impl TabFilter {
+    /// Advance to the next filter in the cycle: All → Working → Idle → All.
+    pub fn cycle(self) -> Self {
+        match self {
+            TabFilter::All => TabFilter::Working,
+            TabFilter::Working => TabFilter::Idle,
+            TabFilter::Idle => TabFilter::All,
+        }
+    }
+
+    /// Does a tab with the given active-pane agent status pass this filter?
+    /// `None` (no agent detected) matches only `All`.
+    pub fn matches(self, status: Option<crate::agent::AgentStatus>) -> bool {
+        match self {
+            TabFilter::All => true,
+            TabFilter::Working => status == Some(crate::agent::AgentStatus::Working),
+            TabFilter::Idle => status == Some(crate::agent::AgentStatus::Idle),
+        }
+    }
+
+    /// Short label shown in the tab bar when this filter is active.
+    pub fn label(self) -> Option<&'static str> {
+        match self {
+            TabFilter::All => None,
+            TabFilter::Working => Some("working"),
+            TabFilter::Idle => Some("idle"),
+        }
+    }
+}
+
 pub struct TabManager {
     tabs: Vec<Tab>,
     active_tab_index: usize,
+    /// Current tab-bar visibility filter (#16). Pure view state — never affects
+    /// underlying tab state or number-key addressing.
+    filter: TabFilter,
 }
 
 impl TabManager {
     pub fn new() -> Self {
-        Self { tabs: Vec::new(), active_tab_index: 0 }
+        Self { tabs: Vec::new(), active_tab_index: 0, filter: TabFilter::default() }
+    }
+
+    /// The current tab-bar visibility filter.
+    pub fn filter(&self) -> TabFilter {
+        self.filter
+    }
+
+    /// Advance the tab-bar filter to the next step in its cycle.
+    pub fn cycle_filter(&mut self) {
+        self.filter = self.filter.cycle();
     }
 
     pub fn active_tab_index(&self) -> usize {
@@ -1016,5 +1083,29 @@ mod tests {
             // Sanity: border is strictly inside the viewport.
             assert!(border > origin && border < origin + extent);
         }
+    }
+
+    #[test]
+    fn tab_filter_cycles_all_working_idle() {
+        assert_eq!(TabFilter::All.cycle(), TabFilter::Working);
+        assert_eq!(TabFilter::Working.cycle(), TabFilter::Idle);
+        assert_eq!(TabFilter::Idle.cycle(), TabFilter::All);
+    }
+
+    #[test]
+    fn tab_filter_matches_by_status() {
+        use crate::agent::AgentStatus;
+        // All matches everything, including no-agent tabs.
+        assert!(TabFilter::All.matches(None));
+        assert!(TabFilter::All.matches(Some(AgentStatus::Working)));
+        assert!(TabFilter::All.matches(Some(AgentStatus::Idle)));
+        // Working matches only actively-working agents.
+        assert!(TabFilter::Working.matches(Some(AgentStatus::Working)));
+        assert!(!TabFilter::Working.matches(Some(AgentStatus::Idle)));
+        assert!(!TabFilter::Working.matches(None)); // no agent → excluded
+        // Idle matches only quiet agents.
+        assert!(TabFilter::Idle.matches(Some(AgentStatus::Idle)));
+        assert!(!TabFilter::Idle.matches(Some(AgentStatus::Working)));
+        assert!(!TabFilter::Idle.matches(None));
     }
 }

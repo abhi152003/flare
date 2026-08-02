@@ -8,8 +8,9 @@ use std::mem;
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, UNIX_EPOCH};
 
 use glutin::config::Config as GlutinConfig;
 use glutin::display::GetGlDisplay;
@@ -80,6 +81,11 @@ pub struct WindowContext {
 
 impl WindowContext {
     const BORDERLESS_RESIZE_HANDLE_SIZE: f32 = 8.0;
+
+    /// An agent whose last PTY output is older than this (ms) reads as Idle (#15).
+    /// Picked above the 2s `AgentDetect` cadence so an agent emitting every 1-2s
+    /// reliably stays Working.
+    const IDLE_THRESHOLD_MILLIS: u64 = 3000;
 
     /// Create initial window context that does bootstrapping the graphics API we're going to use.
     pub fn initial(
@@ -222,12 +228,14 @@ impl WindowContext {
         // renderer and input processing. Note that access to the terminal state is
         // synchronized since the I/O loop updates the state, and the display
         // consumes it periodically.
+        let last_output = Arc::new(AtomicU64::new(0));
         let event_loop = PtyEventLoop::new(
             Arc::clone(&terminal),
             event_proxy.clone(),
             pty,
             pty_config.drain_on_exit,
             config.debug.ref_test,
+            Some(Arc::clone(&last_output)),
         )?;
 
         // The event loop channel allows write requests from the event processor
@@ -252,6 +260,8 @@ impl WindowContext {
             #[cfg(not(windows))]
             shell_pid,
             agent: None,
+            agent_status: Default::default(),
+            last_output,
         };
         let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane), name: None, zoomed: false };
         let mut tab_manager = TabManager::new();
@@ -605,21 +615,46 @@ impl WindowContext {
             }
         }
 
-        // Collect tab bar info for rendering.
-        let tab_bar_info = if self.tab_manager.tab_count() > 1 {
+        // Collect tab bar info for rendering. Tabs are filtered by the current
+        // agent-status filter (#16); the active tab is always included so the tab
+        // you're viewing never disappears, and active_index is recomputed against
+        // the filtered list.
+        let filter = self.tab_manager.filter();
+        let active_index = self.tab_manager.active_tab_index();
+        let show_bar = self.tab_manager.tab_count() > 1 || filter.label().is_some();
+        let tab_bar_info = if show_bar {
             let entries: Vec<tab::TabBarEntry> = self
                 .tab_manager
                 .tabs()
                 .iter()
                 .enumerate()
+                .filter(|(index, tab)| {
+                    // Always show the active tab; otherwise apply the status filter.
+                    *index == active_index
+                        || filter.matches(tab.active_pane().agent.map(|_| tab.active_pane().agent_status))
+                })
                 .map(|(index, tab)| {
+                    let pane = tab.active_pane();
                     tab::TabBarEntry {
                         title: self.smart_tab_title(tab, index),
-                        agent: tab.active_pane().agent,
+                        agent: pane.agent,
+                        agent_status: pane.agent.map(|_| pane.agent_status),
                     }
                 })
                 .collect();
-            Some((entries, self.tab_manager.active_tab_index()))
+            // Recompute the active tab's position within the filtered list: count
+            // how many shown entries precede it. (The active tab is always shown.)
+            let active_pos = self
+                .tab_manager
+                .tabs()
+                .iter()
+                .take(active_index)
+                .filter(|t| {
+                    let p = t.active_pane();
+                    filter.matches(p.agent.map(|_| p.agent_status))
+                })
+                .count();
+            Some((entries, active_pos, filter))
         } else {
             None
         };
@@ -634,7 +669,7 @@ impl WindowContext {
                 &self.message_buffer,
                 &self.config,
                 &mut self.search_state,
-                tab_bar_info.as_ref().map(|(e, i)| (e.as_slice(), *i)),
+                tab_bar_info.as_ref().map(|(e, i, f)| (e.as_slice(), *i, *f)),
                 self.close_button_hovered,
                 &self.palette_state,
             );
@@ -647,7 +682,7 @@ impl WindowContext {
                 &self.message_buffer,
                 &self.config,
                 &mut self.search_state,
-                tab_bar_info.as_ref().map(|(e, i)| (e.as_slice(), *i)),
+                tab_bar_info.as_ref().map(|(e, i, f)| (e.as_slice(), *i, *f)),
                 self.close_button_hovered,
                 &self.palette_state,
             );
@@ -981,12 +1016,14 @@ impl WindowContext {
         #[cfg(not(windows))]
         let shell_pid = pty.child().id();
 
+        let last_output = Arc::new(AtomicU64::new(0));
         let event_loop = match PtyEventLoop::new(
             Arc::clone(&terminal),
             event_proxy,
             pty,
             pty_config.drain_on_exit,
             self.config.debug.ref_test,
+            Some(Arc::clone(&last_output)),
         ) {
             Ok(el) => el,
             Err(err) => {
@@ -1007,6 +1044,8 @@ impl WindowContext {
             #[cfg(not(windows))]
             shell_pid,
             agent: None,
+            agent_status: Default::default(),
+            last_output,
         };
 
         let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane), name: None, zoomed: false };
@@ -1244,6 +1283,7 @@ impl WindowContext {
     /// `agent::detect`. Returns true if any pane's detected agent changed, so the caller can
     /// request a redraw. Designed to be called on a periodic timer (see `Topic::AgentDetect`).
     pub fn detect_agents(&mut self) -> bool {
+        let now_millis = UNIX_EPOCH.elapsed().map(|d| d.as_millis() as u64).unwrap_or(0);
         let mut changed = false;
         for tab in self.tab_manager.tabs_mut() {
             for pane in tab.root.iter_leaves_mut() {
@@ -1254,8 +1294,23 @@ impl WindowContext {
                 #[cfg(windows)]
                 let detected = None;
 
+                // Derive Working/Idle from recent PTY activity (#15). Only meaningful
+                // when an agent is actually running.
+                let status = detected.map(|_| {
+                    let last = pane.last_output.load(Ordering::Relaxed);
+                    if now_millis.saturating_sub(last) < Self::IDLE_THRESHOLD_MILLIS {
+                        crate::agent::AgentStatus::Working
+                    } else {
+                        crate::agent::AgentStatus::Idle
+                    }
+                });
+
                 if pane.agent != detected {
                     pane.agent = detected;
+                    changed = true;
+                }
+                if pane.agent_status != status.unwrap_or_default() {
+                    pane.agent_status = status.unwrap_or_default();
                     changed = true;
                 }
             }
@@ -1388,12 +1443,14 @@ impl WindowContext {
         #[cfg(not(windows))]
         let shell_pid = pty.child().id();
 
+        let last_output = Arc::new(AtomicU64::new(0));
         let event_loop = PtyEventLoop::new(
             Arc::clone(&terminal),
             event_proxy,
             pty,
             pty_config.drain_on_exit,
             self.config.debug.ref_test,
+            Some(Arc::clone(&last_output)),
         )
         .ok()?;
 
@@ -1409,6 +1466,8 @@ impl WindowContext {
             #[cfg(not(windows))]
             shell_pid,
             agent: None,
+            agent_status: Default::default(),
+            last_output,
         })
     }
 
@@ -1497,6 +1556,12 @@ impl WindowContext {
             },
             TabAction::TogglePaneZoom => {
                 self.tab_manager.active_tab_mut().toggle_zoom();
+                self.display.pending_update.dirty = true;
+                self.dirty = true;
+            },
+            TabAction::CycleTabFilter => {
+                // Pure view-state change — just cycle the tab-bar filter and redraw.
+                self.tab_manager.cycle_filter();
                 self.display.pending_update.dirty = true;
                 self.dirty = true;
             },
