@@ -113,6 +113,30 @@ pub fn detect(process_name: &str) -> Option<AgentKind> {
     Some(kind)
 }
 
+/// Build the argv to re-run a captured agent, if it supports resuming and its command line
+/// already carries a resume token (e.g. `claude --resume <id>`, `codex resume <id>`).
+///
+/// Returns `None` when the agent has no resume token or is an unsupported kind — the restored
+/// pane then just gets the shell at its saved CWD (no relaunch).
+pub fn resume_args(kind: AgentKind, cmdline: &[String]) -> Option<Vec<String>> {
+    if cmdline.is_empty() {
+        return None;
+    }
+    let has_token = match kind {
+        AgentKind::ClaudeCode => contains_any(cmdline, &["--resume", "-r", "resume", "--continue"]),
+        AgentKind::Codex => contains_any(cmdline, &["resume"]),
+        AgentKind::Aider => contains_any(cmdline, &["--session"]),
+        AgentKind::Cursor => contains_any(cmdline, &["--resume"]),
+        AgentKind::Gemini | AgentKind::Unknown => false,
+    };
+    has_token.then(|| cmdline.to_vec())
+}
+
+/// Whether any element of `cmdline` exactly equals one of the given tokens.
+fn contains_any(cmdline: &[String], tokens: &[&str]) -> bool {
+    cmdline.iter().any(|arg| tokens.contains(&arg.as_str()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +246,40 @@ mod tests {
         // Long silent → Idle.
         assert_eq!(classify(0), AgentStatus::Idle);
         // Future/garbage timestamps saturate to Working-safe, but a 0 (never seen output) is Idle.
+    }
+
+    /// Helper: build a Vec<String> cmdline from a slice of &str.
+    fn cmd(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn resume_args_launches_when_resume_token_present() {
+        let full = cmd(&["claude", "--resume", "abc123"]);
+        assert_eq!(resume_args(AgentKind::ClaudeCode, &full), Some(full));
+        let short = cmd(&["/usr/local/bin/claude", "-r", "abc123"]);
+        assert_eq!(resume_args(AgentKind::ClaudeCode, &short), Some(short));
+        // `--continue` (continuation) counts as a resume token too.
+        let cont = cmd(&["claude", "--continue"]);
+        assert_eq!(resume_args(AgentKind::ClaudeCode, &cont), Some(cont));
+        let codex = cmd(&["codex", "resume", "abc123"]);
+        assert_eq!(resume_args(AgentKind::Codex, &codex), Some(codex));
+        let aider = cmd(&["aider", "--session", "abc123"]);
+        assert_eq!(resume_args(AgentKind::Aider, &aider), Some(aider));
+    }
+
+    #[test]
+    fn resume_args_returns_none_without_token_or_unsupported() {
+        assert_eq!(resume_args(AgentKind::ClaudeCode, &cmd(&["claude"])), None);
+        let empty = Vec::new();
+        assert_eq!(resume_args(AgentKind::ClaudeCode, &empty), None);
+        // gemini / unknown are never resumed.
+        assert_eq!(resume_args(AgentKind::Gemini, &cmd(&["gemini", "--resume", "x"])), None);
+        assert_eq!(resume_args(AgentKind::Unknown, &cmd(&["agent", "--resume", "x"])), None);
+    }
+
+    #[test]
+    fn resume_args_token_match_is_exact() {
+        assert_eq!(resume_args(AgentKind::ClaudeCode, &cmd(&["claude", "--resumed"])), None);
     }
 }

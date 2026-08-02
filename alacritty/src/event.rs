@@ -633,7 +633,7 @@ fn first_pane_cwd(session: &crate::session::SessionState) -> Option<std::path::P
     let mut node = &tab.root;
     loop {
         match node {
-            crate::session::PaneNodeState::Leaf { cwd } => return Some(cwd.clone()),
+            crate::session::PaneNodeState::Leaf { cwd, .. } => return Some(cwd.clone()),
             crate::session::PaneNodeState::Split { first, .. } => node = first,
         }
     }

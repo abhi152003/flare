@@ -203,3 +203,51 @@ pub fn foreground_process_name(_master_fd: RawFd, _shell_pid: u32) -> Result<Str
     Ok(String::new())
 }
 
+/// Get the full argv of the foreground process (every NUL-separated `/proc/<pid>/cmdline`
+/// field, not just argv[0]).
+///
+/// Used by agent session resume (#17): Flare records the running agent's command line at
+/// save time so it can re-launch the agent with its resume flag on the next restore.
+/// Mirrors `foreground_process_name`'s PID resolution. On platforms without `/proc`,
+/// returns an empty vec (resume no-ops).
+#[cfg(not(any(windows, target_os = "openbsd")))]
+pub fn foreground_process_cmdline(
+    master_fd: RawFd,
+    shell_pid: u32,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    let pid = foreground_pid(master_fd, shell_pid);
+
+    #[cfg(not(target_os = "freebsd"))]
+    let cmdline_path = format!("/proc/{pid}/cmdline");
+    #[cfg(target_os = "freebsd")]
+    let cmdline_path = format!("/compat/linux/proc/{}/cmdline", pid);
+
+    let raw = fs::read(&cmdline_path)?;
+    Ok(raw
+        .split(|&b| b == 0)
+        .filter(|arg| !arg.is_empty())
+        .map(|arg| String::from_utf8_lossy(arg).into_owned())
+        .collect())
+}
+
+/// Stub: foreground process argv is unavailable on OpenBSD (no `/proc`).
+#[cfg(target_os = "openbsd")]
+pub fn foreground_process_cmdline(
+    _master_fd: RawFd,
+    _shell_pid: u32,
+) -> Result<Vec<String>, Box<dyn Error>> {
+    Ok(Vec::new())
+}
+
+/// Resolve the foreground process-group leader PID, falling back to the shell PID when the
+/// PTY has no foreground group (e.g. the shell itself is the controlling process).
+#[cfg(not(any(windows, target_os = "openbsd")))]
+fn foreground_pid(master_fd: RawFd, shell_pid: u32) -> pid_t {
+    let pid = unsafe { libc::tcgetpgrp(master_fd) };
+    if pid < 0 {
+        shell_pid as pid_t
+    } else {
+        pid
+    }
+}
+

@@ -6,9 +6,8 @@
 //! the terminal track the real working directory (via the existing [`crate::osc7`]
 //! scanner) instead of relying on `/proc` heuristics.
 //!
-//! This is also the foundation for future agent-state reporting (#15 Blocked/Done)
-//! and progress reporting (#18): those will add further OSC emissions to the same
-//! hooks injected here.
+//! This is also the foundation for future agent-state reporting (#15 Blocked/Done):
+//! that will add further OSC emissions to the same hooks injected here.
 
 use std::io;
 use std::path::{Path, PathBuf};

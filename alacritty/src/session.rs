@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::config;
 use crate::tab::{self, PaneNode};
 
-const SESSION_FORMAT_VERSION: u32 = 1;
+const SESSION_FORMAT_VERSION: u32 = 2;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SessionState {
@@ -40,6 +40,9 @@ pub struct TabState {
 pub enum PaneNodeState {
     Leaf {
         cwd: PathBuf,
+        /// Agent captured in this pane at save time, allowing session resume (#17).
+        #[serde(default)]
+        agent: Option<AgentLeaf>,
     },
     Split {
         #[serde(default = "default_ratio")]
@@ -48,6 +51,14 @@ pub enum PaneNodeState {
         first: Box<PaneNodeState>,
         second: Box<PaneNodeState>,
     },
+}
+
+/// An AI agent captured in a leaf pane, sufficient to re-launch it with its resume flag.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct AgentLeaf {
+    /// Agent kind string (e.g. `claude`, `codex`).
+    pub kind: String,
+    pub cmdline: Vec<String>,
 }
 
 fn default_ratio() -> f32 {
@@ -107,7 +118,7 @@ fn pane_node_count(node: &PaneNodeState) -> usize {
 #[cfg(test)]
 fn collect_leaves(node: &PaneNodeState, out: &mut Vec<PathBuf>) {
     match node {
-        PaneNodeState::Leaf { cwd } => out.push(cwd.clone()),
+        PaneNodeState::Leaf { cwd, .. } => out.push(cwd.clone()),
         PaneNodeState::Split { first, second, .. } => {
             collect_leaves(first, out);
             collect_leaves(second, out);
@@ -115,36 +126,44 @@ fn collect_leaves(node: &PaneNodeState, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// What a saved leaf pane captures: its working directory plus any agent running in it (#17).
+#[derive(Debug, Clone, Default)]
+pub struct PaneSaveInfo {
+    pub cwd: Option<PathBuf>,
+    pub agent: Option<AgentLeaf>,
+}
+
 /// Build a [`SessionState`] from a live tab manager.
 ///
-/// `cwd_of` resolves a pane's working directory from its PTY handle.
-pub fn collect<F>(root: PathBuf, tabs: &[tab::Tab], cwd_of: F) -> SessionState
+/// `save_of` resolves each pane's working directory and its running agent from its PTY handle.
+pub fn collect<F>(root: PathBuf, tabs: &[tab::Tab], save_of: F) -> SessionState
 where
-    F: Fn(&tab::Pane) -> Option<PathBuf>,
+    F: Fn(&tab::Pane) -> PaneSaveInfo,
 {
     let tab_states = tabs
         .iter()
-        .map(|tab| TabState { root: collect_node(&tab.root, &cwd_of), name: tab.name.clone() })
+        .map(|tab| TabState { root: collect_node(&tab.root, &save_of), name: tab.name.clone() })
         .collect();
 
     SessionState { version: SESSION_FORMAT_VERSION, root, last_used: now_secs(), tabs: tab_states }
 }
 
-fn collect_node<F>(node: &PaneNode, cwd_of: &F) -> PaneNodeState
+fn collect_node<F>(node: &PaneNode, save_of: &F) -> PaneNodeState
 where
-    F: Fn(&tab::Pane) -> Option<PathBuf>,
+    F: Fn(&tab::Pane) -> PaneSaveInfo,
 {
     match node {
         PaneNode::Leaf(pane) => {
+            let info = save_of(pane);
             // Fall back to home so a restore never opens in `/` or fails outright.
-            let cwd = cwd_of(pane).or_else(home::home_dir).unwrap_or_default();
-            PaneNodeState::Leaf { cwd }
+            let cwd = info.cwd.or_else(home::home_dir).unwrap_or_default();
+            PaneNodeState::Leaf { cwd, agent: info.agent }
         },
         PaneNode::Split { direction, ratio, first, second } => PaneNodeState::Split {
             ratio: *ratio,
             direction: (*direction).into(),
-            first: Box::new(collect_node(first, cwd_of)),
-            second: Box::new(collect_node(second, cwd_of)),
+            first: Box::new(collect_node(first, save_of)),
+            second: Box::new(collect_node(second, save_of)),
         },
     }
 }
@@ -381,7 +400,7 @@ mod tests {
     use super::*;
 
     fn leaf(cwd: &str) -> PaneNodeState {
-        PaneNodeState::Leaf { cwd: PathBuf::from(cwd) }
+        PaneNodeState::Leaf { cwd: PathBuf::from(cwd), agent: None }
     }
 
     fn split(
@@ -445,6 +464,45 @@ mod tests {
         let parsed: Result<SessionState, _> = toml::from_str(bad);
         assert!(parsed.is_ok());
         assert_ne!(parsed.unwrap().version, SESSION_FORMAT_VERSION);
+    }
+
+    fn cmd(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn round_trips_agent_leaf() {
+        let agent = AgentLeaf { kind: "claude".into(), cmdline: cmd(&["claude", "--resume", "abc123"]) };
+        let state = SessionState {
+            version: SESSION_FORMAT_VERSION,
+            root: PathBuf::from("/home/u/proj"),
+            last_used: 123,
+            tabs: vec![TabState { root: PaneNodeState::Leaf { cwd: PathBuf::from("/home/u/proj"), agent: Some(agent.clone()) }, name: None }],
+        };
+
+        let s = toml::to_string(&state).unwrap();
+        assert!(s.contains("agent"), "serialized session should contain the agent block");
+
+        let back: SessionState = toml::from_str(&s).unwrap();
+        let back_agent = match &back.tabs[0].root {
+            PaneNodeState::Leaf { agent, .. } => agent,
+            _ => panic!("expected a leaf"),
+        };
+        assert_eq!(back_agent.as_ref(), Some(&agent));
+    }
+
+    #[test]
+    fn old_leaf_without_agent_field_loads_as_none() {
+        // Version-1 style leaf (no `agent` key) must still deserialize via `#[serde(default)]`.
+        let old = "version = 1\nroot = \"/home/u/proj\"\nlast_used = 0\ntabs = []\n";
+        let parsed: Result<SessionState, _> = toml::from_str(old);
+        assert!(parsed.is_ok());
+
+        let old_leaf: PaneNodeState = toml::from_str("type = \"Leaf\"\ncwd = \"/x\"\n").unwrap();
+        match old_leaf {
+            PaneNodeState::Leaf { agent, .. } => assert_eq!(agent, None, "missing agent should default to None"),
+            _ => panic!("expected a leaf"),
+        }
     }
 
     #[test]
