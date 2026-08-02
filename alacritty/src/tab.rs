@@ -142,6 +142,22 @@ impl PaneNode {
         }
     }
 
+    /// Mutable variant of [`active_pane`](Self::active_pane).
+    pub fn active_pane_mut(&mut self) -> &mut Pane {
+        match self {
+            PaneNode::Leaf(pane) => pane,
+            PaneNode::Split { first, second, .. } => {
+                if first.has_active() {
+                    first.active_pane_mut()
+                } else if second.has_active() {
+                    second.active_pane_mut()
+                } else {
+                    first.active_pane_mut()
+                }
+            },
+        }
+    }
+
     /// Total number of leaf panes.
     pub fn pane_count(&self) -> usize {
         match self {
@@ -195,6 +211,8 @@ impl PaneNode {
                     terminal: pane.terminal.clone(),
                     notifier: pane.notifier.clone(),
                     active: false,
+                    // A split is a re-layout, not a new pane — the existing pane keeps its id.
+                    id: pane.id,
                     #[cfg(not(windows))]
                     master_fd: pane.master_fd,
                     #[cfg(not(windows))]
@@ -571,6 +589,33 @@ impl PaneNode {
         }
     }
 
+    /// Focus the leaf with the given durable id; returns whether it was found (#28).
+    /// Consumed by the JSON socket (#33) and CLI pane control (#34).
+    #[allow(dead_code)]
+    pub(crate) fn focus_pane_by_id(&mut self, id: u64) -> bool {
+        match self {
+            PaneNode::Leaf(pane) => {
+                if pane.id == id {
+                    pane.active = true;
+                    true
+                } else {
+                    false
+                }
+            },
+            PaneNode::Split { first, second, .. } => {
+                if first.focus_pane_by_id(id) {
+                    second.clear_active();
+                    true
+                } else if second.focus_pane_by_id(id) {
+                    first.clear_active();
+                    true
+                } else {
+                    false
+                }
+            },
+        }
+    }
+
     fn ensure_active_first(&mut self) {
         match self {
             PaneNode::Leaf(pane) => pane.active = true,
@@ -666,6 +711,8 @@ pub struct Pane {
     pub terminal: Arc<FairMutex<Term<EventProxy>>>,
     pub notifier: Notifier,
     pub active: bool,
+    /// Durable, never-reused pane id (#28); addressable as `w<window>:p<id>`.
+    pub id: crate::pane_address::PaneId,
     #[cfg(not(windows))]
     pub master_fd: std::os::unix::io::RawFd,
     #[cfg(not(windows))]

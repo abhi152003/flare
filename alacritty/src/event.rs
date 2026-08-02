@@ -223,6 +223,7 @@ impl Processor {
                 None => log::debug!("Skipped session save: no usable root directory"),
             }
         }
+        crate::pane_address::persist_ids();
     }
 
     /// Check if an event is irrelevant and can be skipped.

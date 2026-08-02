@@ -46,7 +46,7 @@ use crate::event::{
 use crate::logging::LOG_TARGET_IPC_CONFIG;
 use crate::message_bar::MessageBuffer;
 use crate::scheduler::Scheduler;
-use crate::tab::{self, TabManager};
+use crate::tab::{self, TabManager, Pane};
 use crate::{input, renderer};
 
 /// Event context for one individual Alacritty window.
@@ -77,6 +77,8 @@ pub struct WindowContext {
     palette_state: crate::palette::PaletteState,
     /// Active pane-border drag, if the left button went down on a split border.
     pane_drag: Option<tab::PaneDrag>,
+    /// Durable window number (`w<number>`), unique per app lifetime (#28).
+    pub window_number: crate::pane_address::PaneId,
 }
 
 impl WindowContext {
@@ -255,6 +257,7 @@ impl WindowContext {
             terminal: Arc::clone(&terminal),
             notifier: Notifier(loop_tx.clone()),
             active: true,
+            id: crate::pane_address::id::next_pane_id(),
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -294,6 +297,7 @@ impl WindowContext {
             close_button_hovered: false,
             palette_state: Default::default(),
             pane_drag: None,
+            window_number: crate::pane_address::id::next_window_id(),
         })
     }
 
@@ -635,8 +639,15 @@ impl WindowContext {
                 })
                 .map(|(index, tab)| {
                     let pane = tab.active_pane();
+                    // Tag split tabs with the focused pane's durable address (#28).
+                    let title = if tab.is_split() {
+                        let address = crate::pane_address::PaneAddress::new(self.window_number, pane.id);
+                        format!("{} · {address}", self.smart_tab_title(tab, index))
+                    } else {
+                        self.smart_tab_title(tab, index)
+                    };
                     tab::TabBarEntry {
-                        title: self.smart_tab_title(tab, index),
+                        title,
                         agent: pane.agent,
                         agent_status: pane.agent.map(|_| pane.agent_status),
                     }
@@ -962,13 +973,14 @@ impl WindowContext {
     /// Create a new tab with a fresh PTY and terminal.
     pub fn create_new_tab(&mut self, proxy: &EventLoopProxy<Event>) {
         let cwd = self.active_pane_cwd();
-        self.create_new_tab_with_cwd(proxy, cwd);
+        self.create_new_tab_with_cwd(proxy, cwd, 0);
     }
 
     fn create_new_tab_with_cwd(
         &mut self,
         proxy: &EventLoopProxy<Event>,
         cwd: Option<PathBuf>,
+        requested_id: u64,
     ) {
         let mut pty_config = self.config.pty_config();
         if cwd.is_some() {
@@ -1039,6 +1051,7 @@ impl WindowContext {
             terminal: Arc::clone(&terminal),
             notifier: Notifier(loop_tx),
             active: true,
+            id: resolve_pane_id(requested_id),
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -1126,7 +1139,7 @@ impl WindowContext {
         proxy: &EventLoopProxy<Event>,
     ) {
         let cwd = self.active_pane_cwd();
-        let new_pane = match self.create_pane(proxy, cwd) {
+        let new_pane = match self.create_pane(proxy, cwd, 0) {
             Some(pane) => pane,
             None => return,
         };
@@ -1329,6 +1342,7 @@ impl WindowContext {
         let root = self.pane_cwd(first_pane).or_else(home::home_dir)?;
         let save_of = |pane: &tab::Pane| crate::session::PaneSaveInfo {
             cwd: self.pane_cwd(pane),
+            id: pane.id,
             // Capture the running agent's command line so session restore can re-launch it
             // with its resume flag (#17).
             agent: pane.agent.map(|kind| {
@@ -1364,15 +1378,23 @@ impl WindowContext {
         // so no cd is needed. When restoring from the palette mid-session, the current pane is
         // already running in a different directory, so we cd it.
         if !startup {
-            if let Some((first_cwd, _)) = leaves.first() {
+            if let Some((first_cwd, _, _)) = leaves.first() {
                 if let Some(cmd) = make_cd_command(first_cwd) {
                     let _ = self.notifier.0.send(Msg::Input(cmd.into()));
                 }
             }
         }
 
+        // Reassign the saved id to the already-created first pane, reserving it (#28).
+        if let Some((_, first_id, _)) = leaves.first() {
+            if *first_id != 0 {
+                crate::pane_address::id::ensure_pane_at_least(*first_id);
+                self.tab_manager.active_tab_mut().root.active_pane_mut().id = *first_id;
+            }
+        }
+
         let mut created = 1usize;
-        for (cwd, agent) in leaves.iter().skip(1) {
+        for (cwd, id, agent) in leaves.iter().skip(1) {
             if created >= MAX_PANES {
                 break;
             }
@@ -1381,7 +1403,7 @@ impl WindowContext {
             } else {
                 tab::SplitDirection::Vertical
             };
-            self.split_active_pane_with_cwd(direction, cwd.clone(), proxy);
+            self.split_active_pane_with_cwd(direction, cwd.clone(), *id, proxy);
             // After the split the new pane is active; re-launch its saved agent (#17).
             self.maybe_resume_active(agent);
             created += 1;
@@ -1391,17 +1413,19 @@ impl WindowContext {
         self.tab_manager.active_tab_mut().name = first_tab.name.clone();
 
         // Re-launch the first pane's agent (it already exists; nothing is created here).
-        if let Some((_, agent)) = leaves.first() {
+        if let Some((_, _, agent)) = leaves.first() {
             self.maybe_resume_active(agent);
         }
 
         for tab_state in tabs {
             let tab_leaves = first_tab_leaves(&tab_state.root);
-            let first_cwd = tab_leaves.first().map(|(cwd, _)| cwd.clone());
-            self.create_new_tab_with_cwd(proxy, sanitize_cwd(first_cwd.as_deref()));
+            let first_leaf = tab_leaves.first();
+            let first_cwd = first_leaf.map(|(cwd, _, _)| cwd.clone());
+            let first_id = first_leaf.map(|(_, id, _)| *id).unwrap_or(0);
+            self.create_new_tab_with_cwd(proxy, sanitize_cwd(first_cwd.as_deref()), first_id);
             self.tab_manager.active_tab_mut().name = tab_state.name.clone();
 
-            for (cwd, agent) in tab_leaves.iter().skip(1) {
+            for (cwd, id, agent) in tab_leaves.iter().skip(1) {
                 if created >= MAX_PANES {
                     break;
                 }
@@ -1410,13 +1434,13 @@ impl WindowContext {
                 } else {
                     tab::SplitDirection::Vertical
                 };
-                self.split_active_pane_with_cwd(direction, cwd.clone(), proxy);
+                self.split_active_pane_with_cwd(direction, cwd.clone(), *id, proxy);
                 self.maybe_resume_active(agent);
                 created += 1;
             }
 
             // Resume an agent in the first (already-created) pane of this tab.
-            if let Some((_, agent)) = tab_leaves.first() {
+            if let Some((_, _, agent)) = tab_leaves.first() {
                 self.maybe_resume_active(agent);
             }
         }
@@ -1436,9 +1460,10 @@ impl WindowContext {
         &mut self,
         direction: tab::SplitDirection,
         cwd: PathBuf,
+        requested_id: u64,
         proxy: &EventLoopProxy<Event>,
     ) {
-        let new_pane = match self.create_pane(proxy, Some(cwd)) {
+        let new_pane = match self.create_pane(proxy, Some(cwd), requested_id) {
             Some(pane) => pane,
             None => return,
         };
@@ -1452,6 +1477,7 @@ impl WindowContext {
         &self,
         proxy: &EventLoopProxy<Event>,
         cwd: Option<PathBuf>,
+        requested_id: u64,
     ) -> Option<tab::Pane> {
         let mut pty_config = self.config.pty_config();
         if let Some(cwd) = cwd {
@@ -1490,6 +1516,7 @@ impl WindowContext {
             terminal,
             notifier: Notifier(loop_tx),
             active: true,
+            id: resolve_pane_id(requested_id),
             #[cfg(not(windows))]
             master_fd,
             #[cfg(not(windows))]
@@ -1658,6 +1685,45 @@ impl WindowContext {
             }
         }
     }
+
+    /// Address of the currently focused pane, e.g. `w1:p3` (#28).
+    // Consumed by the JSON socket (#33) and CLI pane control (#34).
+    #[allow(dead_code)]
+    pub fn active_pane_address(&self) -> crate::pane_address::PaneAddress {
+        let pane = self.tab_manager.active_tab().root.active_pane();
+        crate::pane_address::PaneAddress::new(self.window_number, pane.id)
+    }
+
+    /// Find a pane by its durable id in any tab of this window.
+    // Consumed by the JSON socket (#33) and CLI pane control (#34).
+    #[allow(dead_code)]
+    pub fn pane_for_address(&self, address: &crate::pane_address::PaneAddress) -> Option<&Pane> {
+        if address.window != 0 && address.window != self.window_number {
+            return None;
+        }
+        self.tab_manager.tabs().iter().find_map(|tab| {
+            tab.root.iter_leaves().into_iter().find(|pane| pane.id == address.pane)
+        })
+    }
+
+    /// Focus the pane with the given durable id, activating its tab if needed.
+    ///
+    /// Returns `false` when no pane in this window has that id.
+    // Consumed by the JSON socket (#33) and CLI pane control (#34).
+    #[allow(dead_code)]
+    pub fn focus_pane_by_address(&mut self, address: &crate::pane_address::PaneAddress) -> bool {
+        if address.window != 0 && address.window != self.window_number {
+            return false;
+        }
+        for (index, tab) in self.tab_manager.tabs_mut().iter_mut().enumerate() {
+            if tab.root.focus_pane_by_id(address.pane) {
+                self.tab_manager.select_tab(index);
+                self.dirty = true;
+                return true;
+            }
+        }
+        false
+    }
 }
 
 impl Drop for WindowContext {
@@ -1673,8 +1739,8 @@ impl Drop for WindowContext {
 
 // Session-restore helpers.
 
-/// Each restored leaf: its CWD plus any agent captured at save time (for resume, #17).
-type LeafInfo = (PathBuf, Option<crate::session::AgentLeaf>);
+/// Each restored leaf: its CWD, durable pane id, and any agent captured at save time.
+type LeafInfo = (PathBuf, u64, Option<crate::session::AgentLeaf>);
 
 fn first_tab_leaves(node: &crate::session::PaneNodeState) -> Vec<LeafInfo> {
     let mut out = Vec::new();
@@ -1684,11 +1750,24 @@ fn first_tab_leaves(node: &crate::session::PaneNodeState) -> Vec<LeafInfo> {
 
 fn collect_session_leaves(node: &crate::session::PaneNodeState, out: &mut Vec<LeafInfo>) {
     match node {
-        crate::session::PaneNodeState::Leaf { cwd, agent } => out.push((cwd.clone(), agent.clone())),
+        crate::session::PaneNodeState::Leaf { cwd, id, agent } => {
+            out.push((cwd.clone(), *id, agent.clone()))
+        },
         crate::session::PaneNodeState::Split { first, second, .. } => {
             collect_session_leaves(first, out);
             collect_session_leaves(second, out);
         }
+    }
+}
+
+/// Resolve the id for a newly-created pane: reuse a restored `requested_id` (reserving it so the
+/// counter never reissues it), or allocate a fresh never-reused id.
+fn resolve_pane_id(requested: u64) -> u64 {
+    if requested == 0 {
+        crate::pane_address::id::next_pane_id()
+    } else {
+        crate::pane_address::id::ensure_pane_at_least(requested);
+        requested
     }
 }
 

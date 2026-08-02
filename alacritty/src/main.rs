@@ -46,6 +46,7 @@ mod panic;
 #[cfg(unix)]
 mod polling;
 mod path_util;
+mod pane_address;
 mod renderer;
 mod scheduler;
 mod session;
@@ -170,6 +171,9 @@ fn alacritty(mut options: Options) -> Result<(), Box<dyn Error>> {
 
     // Update the log level from config.
     log::set_max_level(config.debug.log_level);
+
+    // Seed durable pane/window id counters from disk so ids stay unique across restarts (#28).
+    pane_address::load_ids();
 
     // Set tty environment variables.
     tty::setup_env();
