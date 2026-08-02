@@ -63,6 +63,7 @@ use crate::message_bar::{Message, MessageBuffer};
 #[cfg(unix)]
 use crate::polling::ipc::{self, SocketReply};
 use crate::scheduler::{Scheduler, TimerId, Topic};
+use crate::tab::Pane;
 use crate::window_context::WindowContext;
 
 /// Duration after the last user input until an unlimited search is performed.
@@ -207,6 +208,45 @@ impl Processor {
 
     fn restore_enabled(&self) -> bool {
         self.config.session.restore && !self.cli_options.no_restore
+    }
+
+    /// Resolve a pane address across all windows, `0` window matching any window.
+    #[cfg(unix)]
+    fn window_with_pane(
+        &self,
+        address: &crate::pane_address::PaneAddress,
+    ) -> Option<(&WindowContext, &Pane)> {
+        self.windows
+            .values()
+            .find_map(|window| window.pane_for_address(address).map(|pane| (window, pane)))
+    }
+
+    /// Fetch a pane's output as plain text for the IPC `pane-output` request (#33).
+    #[cfg(unix)]
+    fn pane_output_from_ipc(
+        &self,
+        address: &str,
+        max_lines: usize,
+    ) -> Result<String, String> {
+        let address = address
+            .parse::<crate::pane_address::PaneAddress>()
+            .map_err(|_| "invalid pane address (expected e.g. w1:p3)".to_string())?;
+        let (window, pane) = self
+            .window_with_pane(&address)
+            .ok_or_else(|| format!("no pane with address {address}"))?;
+        Ok(window.pane_output(pane, max_lines))
+    }
+
+    /// Fetch a pane's metadata as JSON for the IPC `pane-info` request (#33).
+    #[cfg(unix)]
+    fn pane_info_from_ipc(&self, address: &str) -> Result<crate::window_context::PaneInfo, String> {
+        let address = address
+            .parse::<crate::pane_address::PaneAddress>()
+            .map_err(|_| "invalid pane address (expected e.g. w1:p3)".to_string())?;
+        let (window, pane) = self
+            .window_with_pane(&address)
+            .ok_or_else(|| format!("no pane with address {address}"))?;
+        Ok(window.pane_info(pane))
     }
 
     fn save_all_sessions(&self) {
@@ -425,6 +465,50 @@ impl ApplicationHandler<Event> for Processor {
                 // Send JSON config to the socket.
                 if let Ok(mut stream) = stream.try_clone() {
                     ipc::send_reply(&mut stream, SocketReply::GetConfig(config_json));
+                }
+            },
+            // List all panes across windows.
+            #[cfg(unix)]
+            (EventType::IpcListPanes(stream, json), _) => {
+                let mut panes = Vec::new();
+                for window_context in self.windows.values() {
+                    panes.extend(window_context.pane_infos());
+                }
+                let reply = if panes.is_empty() {
+                    if json {
+                        "[]".to_string()
+                    } else {
+                        "no panes".to_string()
+                    }
+                } else if json {
+                    serde_json::to_string(&panes).unwrap_or_default()
+                } else {
+                    panes.iter().map(|pane| pane.to_string()).collect::<Vec<_>>().join("\n")
+                };
+                if let Ok(mut stream) = stream.try_clone() {
+                    ipc::send_reply(&mut stream, SocketReply::ListPanes(reply));
+                }
+            },
+            // Fetch a pane's output as plain text.
+            #[cfg(unix)]
+            (EventType::IpcPaneOutput(stream, options), _) => {
+                let reply = match self.pane_output_from_ipc(&options.address, options.lines) {
+                    Ok(output) => output,
+                    Err(message) => format!("error: {message}"),
+                };
+                if let Ok(mut stream) = stream.try_clone() {
+                    ipc::send_reply(&mut stream, SocketReply::PaneOutput(reply));
+                }
+            },
+            // Fetch a pane's metadata as JSON.
+            #[cfg(unix)]
+            (EventType::IpcPaneInfo(stream, address), _) => {
+                let reply = match self.pane_info_from_ipc(&address) {
+                    Ok(info) => serde_json::to_string(&info).unwrap_or_default(),
+                    Err(message) => format!("error: {message}"),
+                };
+                if let Ok(mut stream) = stream.try_clone() {
+                    ipc::send_reply(&mut stream, SocketReply::PaneInfo(reply));
                 }
             },
             (EventType::ConfigReload(path), _) => {
@@ -674,6 +758,12 @@ pub enum EventType {
     IpcConfig(IpcConfig),
     #[cfg(unix)]
     IpcGetConfig(Arc<UnixStream>),
+    #[cfg(unix)]
+    IpcListPanes(Arc<UnixStream>, bool),
+    #[cfg(unix)]
+    IpcPaneOutput(Arc<UnixStream>, crate::cli::PaneOutputOptions),
+    #[cfg(unix)]
+    IpcPaneInfo(Arc<UnixStream>, String),
     BlinkCursor,
     BlinkCursorTimeout,
     SearchNext,
@@ -2180,7 +2270,12 @@ impl input::Processor<EventProxy, ActionContext<'_, Notifier, EventProxy>> {
                     TerminalEvent::Cwd(_) => (),
                 },
                 #[cfg(unix)]
-                EventType::IpcConfig(_) | EventType::IpcGetConfig(..) | EventType::Shutdown => (),
+                EventType::IpcConfig(_)
+                | EventType::IpcGetConfig(..)
+                | EventType::IpcListPanes(..)
+                | EventType::IpcPaneOutput(..)
+                | EventType::IpcPaneInfo(..)
+                | EventType::Shutdown => (),
                 EventType::Message(_)
                 | EventType::ConfigReload(_)
                 | EventType::CreateWindow(_)

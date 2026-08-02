@@ -31,16 +31,17 @@ _alacritty() {
 '(-v)*-q[Reduces the level of verbosity (the min level is -qq)]' \
 '(-q)*-v[Increases the level of verbosity (the max level is -vvv)]' \
 '--daemon[Do not spawn an initial window]' \
+'--no-restore[Do not restore the previous session on startup]' \
 '--hold[Remain open after child process exit]' \
 '-h[Print help]' \
 '--help[Print help]' \
 '-V[Print version]' \
 '--version[Print version]' \
 ":: :_alacritty_commands" \
-"*::: :->alacritty" \
+"*::: :->flare" \
 && ret=0
     case $state in
-    (alacritty)
+    (flare)
         words=($line[1] "${words[@]}")
         (( CURRENT += 1 ))
         curcontext="${curcontext%:*:*}:alacritty-command-$line[1]:"
@@ -95,6 +96,28 @@ _arguments "${_arguments_options[@]}" : \
 '--help[Print help (see more with '\''--help'\'')]' \
 && ret=0
 ;;
+(list-panes)
+_arguments "${_arguments_options[@]}" : \
+'--json[Output the listing as a JSON array]' \
+'-h[Print help]' \
+'--help[Print help]' \
+&& ret=0
+;;
+(pane-output)
+_arguments "${_arguments_options[@]}" : \
+'--lines=[Maximum number of lines to fetch]:LINES:_default' \
+'-h[Print help]' \
+'--help[Print help]' \
+':address -- Pane address to read, e.g. `w1\:p3` (bare `p3` matches any window):_default' \
+&& ret=0
+;;
+(pane-info)
+_arguments "${_arguments_options[@]}" : \
+'-h[Print help]' \
+'--help[Print help]' \
+':address -- Pane address to inspect, e.g. `w1\:p3` (bare `p3` matches any window):_default' \
+&& ret=0
+;;
 (help)
 _arguments "${_arguments_options[@]}" : \
 ":: :_alacritty__msg__help_commands" \
@@ -116,6 +139,18 @@ _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
 (get-config)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(list-panes)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pane-output)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pane-info)
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
@@ -182,6 +217,18 @@ _arguments "${_arguments_options[@]}" : \
 _arguments "${_arguments_options[@]}" : \
 && ret=0
 ;;
+(list-panes)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pane-output)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
+(pane-info)
+_arguments "${_arguments_options[@]}" : \
+&& ret=0
+;;
         esac
     ;;
 esac
@@ -237,6 +284,9 @@ _alacritty__help__msg_commands() {
 'create-window:Create a new window in the same Alacritty process' \
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
+'list-panes:List all panes across windows' \
+'pane-output:Fetch the last lines of a pane'\''s output as plain text' \
+'pane-info:Fetch a pane'\''s metadata as JSON' \
     )
     _describe -t commands 'alacritty help msg commands' commands "$@"
 }
@@ -255,6 +305,21 @@ _alacritty__help__msg__get-config_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty help msg get-config commands' commands "$@"
 }
+(( $+functions[_alacritty__help__msg__list-panes_commands] )) ||
+_alacritty__help__msg__list-panes_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg list-panes commands' commands "$@"
+}
+(( $+functions[_alacritty__help__msg__pane-info_commands] )) ||
+_alacritty__help__msg__pane-info_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg pane-info commands' commands "$@"
+}
+(( $+functions[_alacritty__help__msg__pane-output_commands] )) ||
+_alacritty__help__msg__pane-output_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty help msg pane-output commands' commands "$@"
+}
 (( $+functions[_alacritty__migrate_commands] )) ||
 _alacritty__migrate_commands() {
     local commands; commands=()
@@ -266,6 +331,9 @@ _alacritty__msg_commands() {
 'create-window:Create a new window in the same Alacritty process' \
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
+'list-panes:List all panes across windows' \
+'pane-output:Fetch the last lines of a pane'\''s output as plain text' \
+'pane-info:Fetch a pane'\''s metadata as JSON' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'alacritty msg commands' commands "$@"
@@ -291,6 +359,9 @@ _alacritty__msg__help_commands() {
 'create-window:Create a new window in the same Alacritty process' \
 'config:Update the Alacritty configuration' \
 'get-config:Read runtime Alacritty configuration' \
+'list-panes:List all panes across windows' \
+'pane-output:Fetch the last lines of a pane'\''s output as plain text' \
+'pane-info:Fetch a pane'\''s metadata as JSON' \
 'help:Print this message or the help of the given subcommand(s)' \
     )
     _describe -t commands 'alacritty msg help commands' commands "$@"
@@ -314,6 +385,36 @@ _alacritty__msg__help__get-config_commands() {
 _alacritty__msg__help__help_commands() {
     local commands; commands=()
     _describe -t commands 'alacritty msg help help commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__help__list-panes_commands] )) ||
+_alacritty__msg__help__list-panes_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help list-panes commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__help__pane-info_commands] )) ||
+_alacritty__msg__help__pane-info_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help pane-info commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__help__pane-output_commands] )) ||
+_alacritty__msg__help__pane-output_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg help pane-output commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__list-panes_commands] )) ||
+_alacritty__msg__list-panes_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg list-panes commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__pane-info_commands] )) ||
+_alacritty__msg__pane-info_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg pane-info commands' commands "$@"
+}
+(( $+functions[_alacritty__msg__pane-output_commands] )) ||
+_alacritty__msg__pane-output_commands() {
+    local commands; commands=()
+    _describe -t commands 'alacritty msg pane-output commands' commands "$@"
 }
 
 if [ "$funcstack[1]" = "_alacritty" ]; then

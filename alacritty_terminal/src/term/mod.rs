@@ -582,6 +582,31 @@ impl<T> Term<T> {
         res.strip_suffix('\n').map(str::to_owned).unwrap_or(res)
     }
 
+    /// Extract the last `max_lines` lines of output (scrollback + screen), oldest first.
+    ///
+    /// Read-only snapshot taken from the bottom of the terminal, ignoring any viewport
+    /// scrolling. Lines are `\n`-terminated; wrapped lines are joined without a newline.
+    pub fn scrollback_text(&self, max_lines: usize) -> String {
+        // The cursor row is blank; the newest content is one row above it. Walk upward
+        // from there to the oldest row (topmost_line), capping at max_lines.
+        let top = self.grid.topmost_line().0;
+        let newest = self.grid.cursor.point.line.0 - 1;
+        let available = (newest - top + 1).max(0) as usize;
+        let limit = max_lines.min(available);
+
+        let mut lines = Vec::with_capacity(limit);
+        for i in 0..limit {
+            let line = Line(newest - i as i32);
+            lines.push(self.line_to_string(line, Column(0)..self.last_column(), false));
+        }
+
+        let mut out = String::new();
+        for line in lines.into_iter().rev() {
+            out.push_str(&line);
+        }
+        out
+    }
+
     /// Convert a single line in the grid to a String.
     fn line_to_string(
         &self,
@@ -3312,5 +3337,32 @@ mod tests {
         assert_eq!(version_number("0.1.2-dev"), 1_02);
         assert_eq!(version_number("1.2.3-dev"), 1_02_03);
         assert_eq!(version_number("999.99.99"), 9_99_99_99);
+    }
+
+    #[test]
+    fn scrollback_text_reads_parsed_output() {
+        let size = TermSize::new(20, 5);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut processor: vte::ansi::Processor<vte::ansi::StdSyncHandler> =
+            vte::ansi::Processor::new();
+        processor.advance(&mut term, b"hello world\r\n");
+        drop(processor);
+        assert_eq!(term.scrollback_text(10), "hello world\n");
+    }
+
+    #[test]
+    fn scrollback_text_reads_history() {
+        let size = TermSize::new(20, 5);
+        let mut term = Term::new(Config::default(), &size, VoidListener);
+        let mut processor: vte::ansi::Processor<vte::ansi::StdSyncHandler> =
+            vte::ansi::Processor::new();
+        for i in 0..15 {
+            processor.advance(&mut term, format!("line {i:02}\r\n").as_bytes());
+        }
+        drop(processor);
+        assert_eq!(
+            term.scrollback_text(10),
+            "line 05\nline 06\nline 07\nline 08\nline 09\nline 10\nline 11\nline 12\nline 13\nline 14\n"
+        );
     }
 }

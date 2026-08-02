@@ -269,6 +269,44 @@ pub enum SocketMessage {
 
     /// Read runtime Alacritty configuration.
     GetConfig(IpcGetConfig),
+
+    /// List all panes across windows.
+    ListPanes(ListPanesOptions),
+
+    /// Fetch the last lines of a pane's output as plain text.
+    PaneOutput(PaneOutputOptions),
+
+    /// Fetch a pane's metadata as JSON.
+    PaneInfo(PaneInfoOptions),
+}
+
+/// Options for listing panes.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Debug, Clone, PartialEq, Eq)]
+pub struct ListPanesOptions {
+    /// Output the listing as a JSON array.
+    #[clap(long)]
+    pub json: bool,
+}
+
+/// Options for fetching a pane's output.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Debug, Clone, PartialEq, Eq)]
+pub struct PaneOutputOptions {
+    /// Pane address to read, e.g. `w1:p3` (bare `p3` matches any window).
+    pub address: String,
+
+    /// Maximum number of lines to fetch.
+    #[clap(long, default_value_t = 50)]
+    pub lines: usize,
+}
+
+/// Options for fetching a pane's metadata.
+#[cfg(unix)]
+#[derive(Serialize, Deserialize, Args, Debug, Clone, PartialEq, Eq)]
+pub struct PaneInfoOptions {
+    /// Pane address to inspect, e.g. `w1:p3` (bare `p3` matches any window).
+    pub address: String,
 }
 
 /// Migrate the configuration file.
@@ -571,3 +609,4 @@ mod tests {
         // clap_complete::generate(Shell::Zsh, &mut clap, "alacritty", &mut file);
     }
 }
+

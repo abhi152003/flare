@@ -31,6 +31,14 @@ impl PaneAddress {
     }
 }
 
+/// Serialize an address as its `wN:pM` string form (for JSON IPC replies, #33).
+pub fn serialize_address<S: serde::Serializer>(
+    address: &PaneAddress,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&address.to_string())
+}
+
 impl fmt::Display for PaneAddress {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "w{}:p{}", self.window, self.pane)

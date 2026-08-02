@@ -1694,6 +1694,39 @@ impl WindowContext {
         crate::pane_address::PaneAddress::new(self.window_number, pane.id)
     }
 
+    /// All panes in this window with their stable addresses and metadata (#33).
+    pub fn pane_infos(&self) -> Vec<PaneInfo> {
+        self.tab_manager
+            .tabs()
+            .iter()
+            .flat_map(|tab| tab.root.iter_leaves())
+            .map(|pane| self.pane_info(pane))
+            .collect()
+    }
+
+    /// Metadata for a single pane in this window (#33).
+    pub fn pane_info(&self, pane: &Pane) -> PaneInfo {
+        // Fetch cwd before locking: pane_cwd takes the same non-reentrant FairMutex.
+        let cwd = self.pane_cwd(pane);
+
+        let terminal = pane.terminal.lock();
+        PaneInfo {
+            address: crate::pane_address::PaneAddress::new(self.window_number, pane.id),
+            cwd,
+            agent: pane.agent.map(|agent| agent.label().to_string()),
+            agent_status: pane.agent.map(|_| format!("{:?}", pane.agent_status)),
+            title: terminal.title.clone(),
+            columns: terminal.columns(),
+            lines: terminal.screen_lines(),
+            scrollback: terminal.grid().history_size(),
+        }
+    }
+
+    /// Extract the last `max_lines` lines of output from a pane (#33).
+    pub fn pane_output(&self, pane: &Pane, max_lines: usize) -> String {
+        pane.terminal.lock().scrollback_text(max_lines)
+    }
+
     /// Find a pane by its durable id in any tab of this window.
     // Consumed by the JSON socket (#33) and CLI pane control (#34).
     #[allow(dead_code)]
@@ -1723,6 +1756,33 @@ impl WindowContext {
             }
         }
         false
+    }
+}
+
+/// One pane as reported by the IPC pane listing (#33).
+#[derive(serde::Serialize)]
+pub struct PaneInfo {
+    #[serde(serialize_with = "crate::pane_address::serialize_address")]
+    pub address: crate::pane_address::PaneAddress,
+    pub cwd: Option<PathBuf>,
+    pub agent: Option<String>,
+    pub agent_status: Option<String>,
+    pub title: Option<String>,
+    pub columns: usize,
+    pub lines: usize,
+    pub scrollback: usize,
+}
+
+impl std::fmt::Display for PaneInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.address)?;
+        if let Some(cwd) = &self.cwd {
+            write!(f, "\t{}", cwd.display())?;
+        }
+        if let (Some(agent), Some(status)) = (&self.agent, &self.agent_status) {
+            write!(f, "\t{agent}\t{status}")?;
+        }
+        Ok(())
     }
 }
 

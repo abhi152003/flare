@@ -85,6 +85,21 @@ impl IpcListener {
                 let event = Event::new(EventType::IpcGetConfig(Arc::new(stream)), window_id);
                 let _ = self.event_proxy.send_event(event);
             },
+            SocketMessage::ListPanes(options) => {
+                let event =
+                    Event::new(EventType::IpcListPanes(Arc::new(stream), options.json), None);
+                let _ = self.event_proxy.send_event(event);
+            },
+            SocketMessage::PaneOutput(options) => {
+                let event =
+                    Event::new(EventType::IpcPaneOutput(Arc::new(stream), options), None);
+                let _ = self.event_proxy.send_event(event);
+            },
+            SocketMessage::PaneInfo(options) => {
+                let event =
+                    Event::new(EventType::IpcPaneInfo(Arc::new(stream), options.address), None);
+                let _ = self.event_proxy.send_event(event);
+            },
         }
 
         Ok(())
@@ -127,6 +142,21 @@ fn handle_reply(stream: &UnixStream, message: &SocketMessage) -> IoResult<()> {
         // Write requested config to STDOUT.
         (SocketMessage::GetConfig(..), SocketReply::GetConfig(config)) => {
             println!("{config}");
+            Ok(())
+        },
+        (SocketMessage::ListPanes(..), SocketReply::ListPanes(lines)) => {
+            println!("{lines}");
+            Ok(())
+        },
+        (SocketMessage::PaneOutput(..), SocketReply::PaneOutput(output)) => {
+            print!("{output}");
+            if !output.ends_with('\n') {
+                println!();
+            }
+            Ok(())
+        },
+        (SocketMessage::PaneInfo(..), SocketReply::PaneInfo(info)) => {
+            println!("{info}");
             Ok(())
         },
         // Ignore requests without reply.
@@ -235,4 +265,10 @@ pub fn socket_prefix() -> String {
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SocketReply {
     GetConfig(String),
+    /// Multi-line pane listing (one `wN:pM` line per pane).
+    ListPanes(String),
+    /// A pane's output as plain text, or an error message.
+    PaneOutput(String),
+    /// A pane's metadata as JSON, or an error message.
+    PaneInfo(String),
 }
