@@ -279,10 +279,14 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
                     return;
                 },
                 NamedKey::Enter => {
-                    if let Some(session) =
-                        self.ctx.palette_state_mut().and_then(|p| p.selected_session())
-                    {
+                    let state = self.ctx.palette_state_mut();
+                    let selected_session = state.and_then(|p| p.selected_session());
+                    if let Some(session) = selected_session {
                         self.ctx.restore_session(session);
+                    } else if let Some(address) =
+                        self.ctx.palette_state_mut().and_then(|p| p.selected_pane().cloned())
+                    {
+                        self.ctx.focus_pane(address);
                     }
                     return;
                 },

@@ -166,12 +166,9 @@ pub fn foreground_process_path(
     }
 }
 
-/// Get the basename of the foreground process's argv[0] (e.g. `claude`, not its full path).
-///
-/// Used for AI-agent detection (see `agent::detect`). Mirrors `foreground_process_path`: resolves
-/// the foreground process group via `tcgetpgrp` (falling back to `shell_pid`), then reads
-/// `/proc/<pid>/cmdline`. On platforms without `/proc`, returns an empty string (detection no-ops).
+/// Basename of the foreground process argv[0]. Prefer [`foreground_process_cmdline`] for agents.
 #[cfg(not(any(windows, target_os = "openbsd")))]
+#[allow(dead_code)]
 pub fn foreground_process_name(master_fd: RawFd, shell_pid: u32) -> Result<String, Box<dyn Error>> {
     let mut pid = unsafe { libc::tcgetpgrp(master_fd) };
     if pid < 0 {
@@ -199,6 +196,7 @@ pub fn foreground_process_name(master_fd: RawFd, shell_pid: u32) -> Result<Strin
 
 /// Stub: foreground process name is unavailable on OpenBSD (no `/proc`).
 #[cfg(target_os = "openbsd")]
+#[allow(dead_code)]
 pub fn foreground_process_name(_master_fd: RawFd, _shell_pid: u32) -> Result<String, Box<dyn Error>> {
     Ok(String::new())
 }

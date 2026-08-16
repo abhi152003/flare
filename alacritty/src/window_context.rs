@@ -76,6 +76,7 @@ pub struct WindowContext {
     tab_manager: TabManager,
     close_button_hovered: bool,
     palette_state: crate::palette::PaletteState,
+    context_menu_state: crate::context_menu::ContextMenuState,
     /// Active pane-border drag, if the left button went down on a split border.
     pane_drag: Option<tab::PaneDrag>,
     /// Durable window number (`w<number>`), unique per app lifetime (#28).
@@ -89,6 +90,9 @@ impl WindowContext {
     /// Picked above the 2s `AgentDetect` cadence so an agent emitting every 1-2s
     /// reliably stays Working.
     const IDLE_THRESHOLD_MILLIS: u64 = 3000;
+
+    /// Miss cycles before clearing a sticky agent (~6s at the 2s detect cadence).
+    const AGENT_MISS_GRACE: u8 = 3;
 
     /// Create initial window context that does bootstrapping the graphics API we're going to use.
     pub fn initial(
@@ -266,6 +270,10 @@ impl WindowContext {
             agent: None,
             agent_status: Default::default(),
             last_output,
+            agent_started_at: None,
+            agent_model: None,
+            agent_misses: 0,
+            agent_cmdline: None,
         };
         let initial_tab = tab::Tab { root: tab::PaneNode::Leaf(initial_pane), name: None, zoomed: false };
         let mut tab_manager = TabManager::new();
@@ -297,6 +305,7 @@ impl WindowContext {
             tab_manager,
             close_button_hovered: false,
             palette_state: Default::default(),
+            context_menu_state: Default::default(),
             pane_drag: None,
             window_number: crate::pane_address::id::next_window_id(),
         })
@@ -504,11 +513,37 @@ impl WindowContext {
         focused
     }
 
+    fn open_context_menu(&mut self, proxy: &EventLoopProxy<Event>) {
+        self.palette_state.close();
+        self.focus_pane_at_mouse(proxy);
+        let active_tab = self.tab_manager.active_tab();
+        let items = crate::context_menu::ContextMenuItem::base_items(
+            active_tab.is_split(),
+            active_tab.pane_count(),
+        );
+        let size = self.display.size_info;
+        let grid_top = size.padding_y() + size.tab_bar_offset_y();
+        let grid_left = size.padding_x();
+        let grid_bottom = grid_top + size.screen_lines() as f32 * size.cell_height();
+        let grid_right = grid_left + size.columns() as f32 * size.cell_width();
+        self.context_menu_state.open_at(
+            self.mouse.x as f32,
+            self.mouse.y as f32,
+            items,
+            (grid_left, grid_top, grid_right, grid_bottom),
+            size.cell_height(),
+            size.cell_width(),
+        );
+        self.display.window.set_mouse_cursor(CursorIcon::Default);
+        self.dirty = true;
+    }
+
     /// If the cursor is on a split border, begin a pane-border drag and return
     /// `true` (the press is consumed by the drag). Reads `self.mouse` for the press
     /// position — `CursorMoved` precedes `MouseInput`, so it is current.
     fn maybe_start_pane_drag(&mut self) -> bool {
-        if self.pane_drag.is_some() || !self.tab_manager.active_tab().is_split() {
+        let tab = self.tab_manager.active_tab();
+        if self.pane_drag.is_some() || !tab.is_split() || tab.zoomed {
             return false;
         }
         let viewport = self.full_pane_viewport();
@@ -672,6 +707,7 @@ impl WindowContext {
         };
 
         let active_tab = self.tab_manager.active_tab();
+        let agent_strip = Self::agent_strip_for(active_tab.active_pane());
 
         if active_tab.is_split() {
             // Split pane rendering: draw each pane in its viewport region.
@@ -684,6 +720,8 @@ impl WindowContext {
                 tab_bar_info.as_ref().map(|(e, i, f)| (e.as_slice(), *i, *f)),
                 self.close_button_hovered,
                 &self.palette_state,
+                &self.context_menu_state,
+                agent_strip.as_ref(),
             );
         } else {
             // Single pane: use the standard draw path.
@@ -697,8 +735,24 @@ impl WindowContext {
                 tab_bar_info.as_ref().map(|(e, i, f)| (e.as_slice(), *i, *f)),
                 self.close_button_hovered,
                 &self.palette_state,
+                &self.context_menu_state,
+                agent_strip.as_ref(),
             );
         }
+    }
+
+    fn agent_strip_for(pane: &tab::Pane) -> Option<crate::display::AgentStrip> {
+        let kind = pane.agent?;
+        let now_ms = UNIX_EPOCH.elapsed().map(|d| d.as_millis() as u64).unwrap_or(0);
+        let elapsed =
+            pane.agent_started_at.map(|start| crate::agent::format_elapsed(start, now_ms));
+        let label = crate::agent::metadata_label(
+            kind,
+            pane.agent_model.as_deref(),
+            elapsed.as_deref(),
+        );
+        let accent = pane.agent_status.color(kind);
+        Some(crate::display::AgentStrip { label, accent })
     }
 
     /// Process events for this terminal window.
@@ -710,6 +764,86 @@ impl WindowContext {
         scheduler: &mut Scheduler,
         event: WinitEvent<Event>,
     ) {
+        if self.context_menu_state.is_open() {
+            self.display.window.set_mouse_cursor(CursorIcon::Default);
+
+            if let WinitEvent::WindowEvent {
+                event: WindowEvent::CursorMoved { position, .. },
+                ..
+            } = &event
+            {
+                let w = self.display.size_info.width() as i32;
+                let h = self.display.size_info.height() as i32;
+                self.mouse.x = (position.x as i32).clamp(0, w.saturating_sub(1)) as usize;
+                self.mouse.y = (position.y as i32).clamp(0, h.saturating_sub(1)) as usize;
+                let row_h = self.display.size_info.cell_height();
+                if self.context_menu_state.set_hover_at(
+                    self.mouse.x as f32,
+                    self.mouse.y as f32,
+                    row_h,
+                ) {
+                    self.dirty = true;
+                    if self.display.window.has_frame && !self.occluded {
+                        self.display.window.request_redraw();
+                    }
+                }
+                return;
+            }
+
+            if let WinitEvent::WindowEvent {
+                event:
+                    WindowEvent::MouseInput { state: ElementState::Pressed, button, .. },
+                ..
+            } = &event
+            {
+                let row_h = self.display.size_info.cell_height();
+                let action =
+                    self.context_menu_state.hit_test(self.mouse.x as f32, self.mouse.y as f32, row_h);
+                if let Some(action) = action {
+                    self.context_menu_state.close();
+                    self.dirty = true;
+                    self.handle_tab_action(action, event_proxy);
+                } else {
+                    let reopen = *button == winit::event::MouseButton::Right;
+                    self.context_menu_state.close();
+                    self.dirty = true;
+                    if reopen {
+                        self.open_context_menu(event_proxy);
+                    }
+                }
+                self.display.pending_update.dirty = true;
+                return;
+            }
+            if let WinitEvent::WindowEvent {
+                event: WindowEvent::KeyboardInput { event: key_event, .. },
+                ..
+            } = &event
+            {
+                if key_event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+                    && key_event.state == winit::event::ElementState::Pressed
+                {
+                    self.context_menu_state.close();
+                    self.dirty = true;
+                    self.display.pending_update.dirty = true;
+                    return;
+                }
+            }
+        } else if let WinitEvent::WindowEvent {
+            event:
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button: winit::event::MouseButton::Right,
+                    ..
+                },
+            ..
+        } = &event
+        {
+            self.open_context_menu(event_proxy);
+            self.display.pending_update.dirty = true;
+            return;
+        }
+
         // Check for close button click in borderless mode.
         if self.config.window.decorations == Decorations::None {
             if let WinitEvent::WindowEvent {
@@ -789,11 +923,11 @@ impl WindowContext {
             ..
         } = &event
         {
-            // A press on a split border starts a drag instead of focusing a pane.
             if self.maybe_start_pane_drag() {
                 return;
             }
-            if self.tab_manager.active_tab().is_split() {
+            let tab = self.tab_manager.active_tab();
+            if tab.is_split() && !tab.zoomed {
                 self.focus_pane_at_mouse(event_proxy);
             }
         }
@@ -816,6 +950,16 @@ impl WindowContext {
                 // Continue to process all pending events.
             },
             event => {
+                if let WinitEvent::WindowEvent {
+                    event: WindowEvent::CursorMoved { position, .. },
+                    ..
+                } = &event
+                {
+                    let w = self.display.size_info.width() as i32;
+                    let h = self.display.size_info.height() as i32;
+                    self.mouse.x = (position.x as i32).clamp(0, w.saturating_sub(1)) as usize;
+                    self.mouse.y = (position.y as i32).clamp(0, h.saturating_sub(1)) as usize;
+                }
                 self.event_queue.push(event);
                 return;
             },
@@ -826,6 +970,8 @@ impl WindowContext {
         let old_is_searching = self.search_state.history_index.is_some();
         let mut pending_tab_action = None;
         let mut pending_session_restore = None;
+        let mut pending_focus_pane = None;
+        let mut pending_open_palette = false;
 
         let pending_events = mem::take(&mut self.event_queue);
         let mut pending_events = pending_events.into_iter();
@@ -860,6 +1006,8 @@ impl WindowContext {
                 pending_tab_action: &mut pending_tab_action,
                 palette_state: &mut self.palette_state,
                 pending_session_restore: &mut pending_session_restore,
+                pending_focus_pane: &mut pending_focus_pane,
+                pending_open_palette: &mut pending_open_palette,
             };
             let mut processor = input::Processor::new(context);
             processor.handle_event(event);
@@ -901,6 +1049,26 @@ impl WindowContext {
         // Process a pending palette-triggered session restore.
         if let Some(session) = pending_session_restore {
             self.restore_session(&session, event_proxy, false);
+            self.display.pending_update.dirty = true;
+        }
+
+        if pending_open_palette {
+            self.context_menu_state.close();
+            let mut entries: Vec<crate::palette::PaletteEntry> = crate::session::list()
+                .into_iter()
+                .map(crate::palette::PaletteEntry::Session)
+                .collect();
+            entries.extend(
+                self.live_panes_for_navigator()
+                    .into_iter()
+                    .map(crate::palette::PaletteEntry::Pane),
+            );
+            self.palette_state.open_with_entries(entries);
+            self.display.pending_update.dirty = true;
+        }
+
+        if let Some(address) = pending_focus_pane {
+            self.focus_pane_by_address(&address);
             self.display.pending_update.dirty = true;
         }
 
@@ -1060,6 +1228,10 @@ impl WindowContext {
             agent: None,
             agent_status: Default::default(),
             last_output,
+            agent_started_at: None,
+            agent_model: None,
+            agent_misses: 0,
+            agent_cmdline: None,
         };
 
         let new_tab = tab::Tab { root: tab::PaneNode::Leaf(pane), name: None, zoomed: false };
@@ -1258,13 +1430,30 @@ impl WindowContext {
             _ => title,
         };
 
-        // Append the detected agent's name (e.g. `· claude`) so the agent is identifiable
-        // in the title, complementing the colored status dot.
-        match pane.agent {
-            Some(agent) if !title.contains(agent.label()) => {
-                format!("{title} · {}", agent.label())
-            },
-            _ => title,
+        let Some(agent) = pane.agent else {
+            return title;
+        };
+        let now_ms = UNIX_EPOCH.elapsed().map(|d| d.as_millis() as u64).unwrap_or(0);
+        let elapsed = pane
+            .agent_started_at
+            .map(|start| crate::agent::format_elapsed(start, now_ms));
+        let suffix = crate::agent::title_suffix(
+            agent,
+            pane.agent_model.as_deref(),
+            elapsed.as_deref(),
+        );
+        if title.contains(agent.label()) {
+            let rest = crate::agent::metadata_label(agent, pane.agent_model.as_deref(), elapsed.as_deref());
+            let rest = rest
+                .strip_prefix(agent.label())
+                .map(|s| s.trim_start_matches([' ', '·']).trim())
+                .filter(|s| !s.is_empty());
+            match rest {
+                Some(extra) if !title.contains(extra) => format!("{title} · {extra}"),
+                _ => title,
+            }
+        } else {
+            format!("{title} · {suffix}")
         }
     }
 
@@ -1291,25 +1480,40 @@ impl WindowContext {
         self.tab_manager.active_tab().active_pane().agent
     }
 
-    /// Re-run agent detection across every pane in every tab.
-    ///
-    /// Reads each pane's foreground process name and matches it against the agent profiles in
-    /// `agent::detect`. Returns true if any pane's detected agent changed, so the caller can
-    /// request a redraw. Designed to be called on a periodic timer (see `Topic::AgentDetect`).
+    /// Re-run agent detection; returns true when a redraw is needed.
     pub fn detect_agents(&mut self) -> bool {
         let now_millis = UNIX_EPOCH.elapsed().map(|d| d.as_millis() as u64).unwrap_or(0);
         let mut changed = false;
         for tab in self.tab_manager.tabs_mut() {
             for pane in tab.root.iter_leaves_mut() {
                 #[cfg(not(windows))]
-                let detected = crate::daemon::foreground_process_name(pane.master_fd, pane.shell_pid)
-                    .ok()
-                    .and_then(|name| crate::agent::detect(&name));
+                let cmdline = crate::daemon::foreground_process_cmdline(pane.master_fd, pane.shell_pid)
+                    .unwrap_or_default();
                 #[cfg(windows)]
-                let detected = None;
+                let cmdline: Vec<String> = Vec::new();
 
-                // Derive Working/Idle from recent PTY activity (#15). Only meaningful
-                // when an agent is actually running.
+                let raw_detected = crate::agent::detect_cmdline(&cmdline);
+
+                let detected = match raw_detected {
+                    Some(kind) => {
+                        pane.agent_misses = 0;
+                        if !cmdline.is_empty() {
+                            pane.agent_cmdline = Some(cmdline.clone());
+                        }
+                        Some(kind)
+                    },
+                    None if pane.agent.is_some() => {
+                        pane.agent_misses = pane.agent_misses.saturating_add(1);
+                        if pane.agent_misses < Self::AGENT_MISS_GRACE {
+                            pane.agent
+                        } else {
+                            pane.agent_cmdline = None;
+                            None
+                        }
+                    },
+                    None => None,
+                };
+
                 let status = detected.map(|_| {
                     let last = pane.last_output.load(Ordering::Relaxed);
                     if now_millis.saturating_sub(last) < Self::IDLE_THRESHOLD_MILLIS {
@@ -1319,6 +1523,20 @@ impl WindowContext {
                     }
                 });
 
+                let (started_at, model) = match (pane.agent, detected) {
+                    (_, None) => (None, None),
+                    (prev, Some(kind)) => {
+                        let start = match prev {
+                            Some(old) if old == kind => {
+                                pane.agent_started_at.or(Some(now_millis))
+                            },
+                            _ => Some(now_millis),
+                        };
+                        let model = crate::agent::resolve_model(kind, &cmdline);
+                        (start, model)
+                    },
+                };
+
                 if pane.agent != detected {
                     pane.agent = detected;
                     changed = true;
@@ -1327,10 +1545,25 @@ impl WindowContext {
                     pane.agent_status = status.unwrap_or_default();
                     changed = true;
                 }
+                if pane.agent_started_at != started_at {
+                    pane.agent_started_at = started_at;
+                    changed = true;
+                }
+                if pane.agent_model != model {
+                    pane.agent_model = model;
+                    changed = true;
+                }
             }
         }
         if changed {
             self.dirty = true;
+        }
+        let any_agent = self.tab_manager.tabs().iter().any(|t| {
+            t.root.iter_leaves().into_iter().any(|p| p.agent.is_some())
+        });
+        if any_agent {
+            self.dirty = true;
+            changed = true;
         }
         changed
     }
@@ -1346,10 +1579,9 @@ impl WindowContext {
             id: pane.id,
             // Capture the running agent's command line so session restore can re-launch it
             // with its resume flag (#17).
-            agent: pane.agent.map(|kind| {
-                let cmdline = crate::daemon::foreground_process_cmdline(pane.master_fd, pane.shell_pid)
-                    .unwrap_or_default();
-                crate::session::AgentLeaf { kind: kind.label().to_string(), cmdline }
+            agent: pane.agent.map(|kind| crate::session::AgentLeaf {
+                kind: kind.label().to_string(),
+                cmdline: pane.agent_cmdline.clone().unwrap_or_default(),
             }),
         };
 
@@ -1551,6 +1783,10 @@ impl WindowContext {
             agent: None,
             agent_status: Default::default(),
             last_output,
+            agent_started_at: None,
+            agent_model: None,
+            agent_misses: 0,
+            agent_cmdline: None,
         })
     }
 
@@ -1729,6 +1965,39 @@ impl WindowContext {
             .collect()
     }
 
+    fn live_panes_for_navigator(&self) -> Vec<crate::palette::LivePane> {
+        let active_address = self.active_pane_address();
+        self.tab_manager
+            .tabs()
+            .iter()
+            .flat_map(|tab| tab.root.iter_leaves())
+            .filter_map(|pane| {
+                let address =
+                    crate::pane_address::PaneAddress::new(self.window_number, pane.id);
+                if address == active_address {
+                    return None;
+                }
+                // pane_cwd locks the same non-reentrant FairMutex as the terminal.
+                let cwd = self.pane_cwd(pane);
+                let title = pane.terminal.lock().title.clone();
+                let now_ms =
+                    UNIX_EPOCH.elapsed().map(|d| d.as_millis() as u64).unwrap_or(0);
+                let agent_elapsed = pane
+                    .agent_started_at
+                    .map(|start| crate::agent::format_elapsed(start, now_ms));
+                Some(crate::palette::LivePane {
+                    address,
+                    cwd,
+                    agent: pane.agent,
+                    agent_status: pane.agent.map(|_| pane.agent_status),
+                    title,
+                    agent_model: pane.agent_model.clone(),
+                    agent_elapsed,
+                })
+            })
+            .collect()
+    }
+
     /// Metadata for a single pane in this window (#33).
     pub fn pane_info(&self, pane: &Pane) -> PaneInfo {
         // Fetch cwd before locking: pane_cwd takes the same non-reentrant FairMutex.
@@ -1843,27 +2112,37 @@ fn collect_session_leaves(node: &crate::session::PaneNodeState, out: &mut Vec<Le
 
 /// Resolve the id for a newly-created pane: reuse a restored `requested_id` (reserving it so the
 /// counter never reissues it), or allocate a fresh never-reused id.
-fn resolve_pane_id(requested: u64) -> u64 {
-    if requested == 0 {
+fn resolve_pane_id(requested_id: u64) -> u64 {
+    if requested_id == 0 {
         crate::pane_address::id::next_pane_id()
     } else {
-        crate::pane_address::id::ensure_pane_at_least(requested);
-        requested
+        crate::pane_address::id::ensure_pane_at_least(requested_id);
+        requested_id
     }
 }
 
-/// Build the shell input that re-launches a captured agent with its resume flag, if supported.
 fn resume_command(agent: &Option<crate::session::AgentLeaf>) -> Option<String> {
     let leaf = agent.as_ref()?;
     let kind = match crate::agent::detect(&leaf.kind) {
-        // If we can't map the stored kind string back to a known agent, treat it as Unknown
-        // (never resumed).
         Some(kind) => kind,
         None => crate::agent::AgentKind::Unknown,
     };
-    let argv = crate::agent::resume_args(kind, &leaf.cmdline)?;
-    // Append a newline so the command is submitted (Enter), not just typed into the pane.
-    Some(format!("{}\n", argv.join(" ")))
+    let argv = crate::agent::relaunch_args(kind, &leaf.cmdline)?;
+    Some(format!("{}\n", shell_join(&argv)))
+}
+
+fn shell_join(argv: &[String]) -> String {
+    argv.iter()
+        .map(|a| {
+            if a.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '/' | '=' | ':' | '+'))
+            {
+                a.clone()
+            } else {
+                format!("'{}'", a.replace('\'', "'\\''"))
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn sanitize_cwd(path: Option<&Path>) -> Option<PathBuf> {

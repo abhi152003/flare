@@ -169,6 +169,7 @@ pub trait ActionContext<T: EventListener> {
     fn palette_active(&self) -> bool { false }
     fn palette_state_mut(&mut self) -> Option<&mut crate::palette::PaletteState> { None }
     fn restore_session(&mut self, _session: crate::session::SessionState) {}
+    fn focus_pane(&mut self, _address: crate::pane_address::PaneAddress) {}
     fn toggle_pane_zoom(&mut self) {}
 
     fn cycle_tab_filter(&mut self) {}

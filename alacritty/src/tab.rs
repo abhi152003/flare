@@ -221,6 +221,10 @@ impl PaneNode {
                     agent_status: pane.agent_status,
                     // Keep the existing pane's timestamp continuity (shared Arc).
                     last_output: pane.last_output.clone(),
+                    agent_started_at: pane.agent_started_at,
+                    agent_model: pane.agent_model.clone(),
+                    agent_misses: pane.agent_misses,
+                    agent_cmdline: pane.agent_cmdline.clone(),
                 };
                 *self = PaneNode::Split {
                     direction,
@@ -726,6 +730,13 @@ pub struct Pane {
     /// Last PTY output time (millis since UNIX_EPOCH), written by the PTY reader
     /// thread via this shared atomic so the main thread can read it lock-free.
     pub last_output: Arc<AtomicU64>,
+    /// UNIX ms when the current agent was first detected.
+    pub agent_started_at: Option<u64>,
+    pub agent_model: Option<String>,
+    /// Consecutive detect misses (grace before clearing agent + elapsed).
+    pub agent_misses: u8,
+    /// Argv cached while the agent was alive (for session save after the process exits).
+    pub agent_cmdline: Option<Vec<String>>,
 }
 
 impl fmt::Debug for Pane {
@@ -781,6 +792,9 @@ impl Tab {
     }
 
     pub fn focus_pane_at_point(&mut self, viewport: PaneViewport, x: f32, y: f32) -> bool {
+        if self.zoomed {
+            return false;
+        }
         let Some(index) = self
             .pane_viewports(viewport)
             .iter()

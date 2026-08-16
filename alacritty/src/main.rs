@@ -31,6 +31,7 @@ mod agent;
 mod cli;
 mod clipboard;
 mod config;
+mod context_menu;
 mod daemon;
 mod display;
 mod event;

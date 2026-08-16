@@ -119,6 +119,12 @@ pub(crate) fn tab_bar_close_button_bounds(
     (btn_x, pill_y, btn_w, pill_height)
 }
 
+#[derive(Debug, Clone)]
+pub struct AgentStrip {
+    pub label: String,
+    pub accent: Rgb,
+}
+
 #[derive(Debug)]
 pub enum Error {
     /// Error with window management.
@@ -864,6 +870,8 @@ impl Display {
         tab_bar_info: Option<(&[tab::TabBarEntry], usize, tab::TabFilter)>,
         close_button_hovered: bool,
         palette: &crate::palette::PaletteState,
+        context_menu: &crate::context_menu::ContextMenuState,
+        agent_strip: Option<&AgentStrip>,
     ) {
         // Collect renderable content before the terminal is dropped.
         let mut content = RenderableContent::new(config, self, &terminal, search_state);
@@ -1353,9 +1361,26 @@ impl Display {
             }
         }
 
+        if let Some(strip) = agent_strip {
+            let content_x = size_info.padding_x();
+            let content_y = size_info.padding_y() + size_info.tab_bar_offset_y();
+            let content_w = size_info.width() - 2.0 * size_info.padding_x();
+            let content_h =
+                size_info.height() - 2.0 * size_info.padding_y() - size_info.tab_bar_offset_y();
+            self.draw_agent_strip(
+                config,
+                strip,
+                tab::PaneViewport::new(content_x, content_y, content_w, content_h),
+            );
+        }
+
         // Draw the palette overlay on top of everything (single-pane path).
         if palette.is_open() {
             self.draw_palette(config, palette);
+        }
+
+        if context_menu.is_open() {
+            self.draw_context_menu(config, context_menu);
         }
 
         self.draw_render_timer(config);
@@ -1408,6 +1433,8 @@ impl Display {
         tab_bar_info: Option<(&[tab::TabBarEntry], usize, tab::TabFilter)>,
         close_button_hovered: bool,
         palette: &crate::palette::PaletteState,
+        context_menu: &crate::context_menu::ContextMenuState,
+        agent_strip: Option<&AgentStrip>,
     ) {
         let size_info = self.size_info;
         let metrics = self.glyph_cache.font_metrics();
@@ -1636,9 +1663,21 @@ impl Display {
             }
         }
 
+        if let Some(strip) = agent_strip {
+            if let Some((vp, _)) =
+                pane_viewports.iter().find(|(_, p)| std::ptr::eq(*p, active_pane))
+            {
+                self.draw_agent_strip(config, strip, *vp);
+            }
+        }
+
         // Draw the palette overlay on top of everything (split-pane path).
         if palette.is_open() {
             self.draw_palette(config, palette);
+        }
+
+        if context_menu.is_open() {
+            self.draw_context_menu(config, context_menu);
         }
 
         self.draw_render_timer(config);
@@ -2243,18 +2282,18 @@ impl Display {
         let cols = ((box_width - 20.0) / size_info.cell_width()) as usize;
 
         // Title.
-        self.draw_palette_row("Switch to directory", 0, dim, bg, box_x, box_y, row_h, cols, size_info);
+        self.draw_palette_row("Switch to session or pane", 0, dim, bg, box_x, box_y, row_h, cols, size_info);
         // Query.
         self.draw_palette_row(&format!("> {}", palette.query()), 1, text_fg, bg, box_x, box_y, row_h, cols, size_info);
 
         if visible.is_empty() {
-            self.draw_palette_row("No saved sessions yet", 2, dim, bg, box_x, box_y, row_h, cols, size_info);
+            self.draw_palette_row("No matches", 2, dim, bg, box_x, box_y, row_h, cols, size_info);
         } else {
             for (view_i, abs_i) in (scroll_offset..end).enumerate() {
                 let (_, entry) = &visible[abs_i];
                 let fg = if abs_i == selected { accent } else { text_fg };
                 self.draw_palette_row(
-                    &crate::path_util::shorten_path(&entry.label),
+                    &entry.row_text(),
                     view_i + 2,
                     fg,
                     bg,
@@ -2308,6 +2347,125 @@ impl Display {
             &text_size,
             &mut self.glyph_cache,
         );
+    }
+
+    fn draw_agent_strip(
+        &mut self,
+        config: &UiConfig,
+        strip: &AgentStrip,
+        viewport: tab::PaneViewport,
+    ) {
+        let size_info = self.size_info;
+        let cell_w = size_info.cell_width();
+        let row_h = size_info.cell_height();
+        let pad = 6.0_f32;
+        let label = &strip.label;
+        let cols = label.chars().count().max(1);
+        let pill_w = (cols as f32) * cell_w + 2.0 * pad;
+        let pill_h = row_h + 4.0;
+        let pill_x = viewport.x + 6.0;
+        let pill_y = (viewport.y + viewport.height - pill_h - 6.0).max(viewport.y);
+
+        let bg = config.colors.primary.background;
+        let text_fg = config.colors.primary.foreground;
+        let rects = vec![
+            RenderRect::new(pill_x, pill_y, pill_w, pill_h, bg, 0.92),
+            RenderRect::new(pill_x, pill_y, 3.0, pill_h, strip.accent, 0.9),
+        ];
+        self.renderer.draw_rects(&size_info, &self.glyph_cache.font_metrics(), rects);
+
+        let grid_top = size_info.padding_y() + size_info.tab_bar_offset_y();
+        let grid_left = size_info.padding_x();
+        let text_x = pill_x + pad;
+        let text_y = pill_y + 2.0;
+        let start_col = ((text_x - grid_left) / cell_w).round().max(0.0) as usize;
+        let start_line = ((text_y - grid_top) / row_h).round().max(0.0) as usize;
+        if start_line < size_info.screen_lines() && start_col < size_info.columns() {
+            self.renderer.draw_string(
+                Point::new(start_line, Column(start_col)),
+                text_fg,
+                bg,
+                label.chars(),
+                &size_info,
+                &mut self.glyph_cache,
+            );
+        }
+    }
+
+    fn draw_context_menu(
+        &mut self,
+        config: &UiConfig,
+        menu: &crate::context_menu::ContextMenuState,
+    ) {
+        let size_info = self.size_info;
+        let items = menu.items();
+        if items.is_empty() {
+            return;
+        }
+
+        let row_h = size_info.cell_height();
+        let cell_w = size_info.cell_width();
+        let pad = crate::context_menu::MENU_PAD;
+        let menu_w = menu.width();
+        let menu_h = (items.len() as f32) * row_h + 2.0 * pad;
+        let box_x = menu.x();
+        let box_y = menu.y();
+
+        let bg = config.colors.primary.background;
+        let accent = config.window.tab_bar.active_color;
+        let text_fg = config.colors.primary.foreground;
+        let hovered = menu.hovered();
+
+        let mut rects = vec![
+            RenderRect::new(box_x, box_y, menu_w, menu_h, bg, 0.97),
+            RenderRect::new(box_x, box_y, menu_w, 1.0, accent, 0.6),
+        ];
+        if let Some(hover_i) = hovered {
+            let hover_y = box_y + pad + (hover_i as f32) * row_h;
+            rects.push(RenderRect::new(
+                box_x + 4.0,
+                hover_y,
+                (menu_w - 8.0).max(1.0),
+                row_h,
+                accent,
+                0.35,
+            ));
+        }
+        self.renderer.draw_rects(&size_info, &self.glyph_cache.font_metrics(), rects);
+
+        let grid_top = size_info.padding_y() + size_info.tab_bar_offset_y();
+        let grid_left = size_info.padding_x();
+        let start_col = ((box_x + pad - grid_left) / cell_w).round().max(0.0) as usize;
+        let start_line = ((box_y + pad - grid_top) / row_h).round().max(0.0) as usize;
+        let max_cols = size_info.columns().saturating_sub(start_col);
+
+        for (i, item) in items.iter().enumerate() {
+            let line = start_line + i;
+            if line >= size_info.screen_lines() {
+                break;
+            }
+            let label: String = if item.label.chars().count() > max_cols {
+                let mut s: String = item.label.chars().take(max_cols.saturating_sub(1)).collect();
+                if max_cols > 0 {
+                    s.push('…');
+                }
+                s
+            } else {
+                item.label.to_string()
+            };
+            let row_bg = if hovered == Some(i) { accent } else { bg };
+            self.renderer.draw_string(
+                Point::new(line, Column(start_col)),
+                text_fg,
+                row_bg,
+                label.chars(),
+                &size_info,
+                &mut self.glyph_cache,
+            );
+        }
+
+        self.damage_tracker.frame().mark_fully_damaged();
+        self.damage_tracker.next_frame().mark_fully_damaged();
     }
 
     /// Draw render timer.

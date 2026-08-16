@@ -936,7 +936,7 @@ impl Default for InlineSearchState {
 }
 
 /// Pending tab/pane actions that need to be handled at the WindowContext level.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TabAction {
     CreateNewTab,
     CloseTab,
@@ -987,6 +987,8 @@ pub struct ActionContext<'a, N, T> {
     pub pending_tab_action: &'a mut Option<TabAction>,
     pub palette_state: &'a mut crate::palette::PaletteState,
     pub pending_session_restore: &'a mut Option<crate::session::SessionState>,
+    pub pending_focus_pane: &'a mut Option<crate::pane_address::PaneAddress>,
+    pub pending_open_palette: &'a mut bool,
 }
 
 impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionContext<'a, N, T> {
@@ -1875,7 +1877,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     }
 
     fn toggle_palette(&mut self) {
-        self.palette_state.toggle();
+        if self.palette_state.is_open() {
+            self.palette_state.close();
+        } else {
+            *self.pending_open_palette = true;
+        }
         *self.dirty = true;
         self.display.damage_tracker.frame().mark_fully_damaged();
         self.display.damage_tracker.next_frame().mark_fully_damaged();
@@ -1892,6 +1898,12 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
     fn restore_session(&mut self, session: crate::session::SessionState) {
         self.palette_state.close();
         *self.pending_session_restore = Some(session);
+        *self.dirty = true;
+    }
+
+    fn focus_pane(&mut self, address: crate::pane_address::PaneAddress) {
+        self.palette_state.close();
+        *self.pending_focus_pane = Some(address);
         *self.dirty = true;
     }
 }
